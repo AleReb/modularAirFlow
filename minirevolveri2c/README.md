@@ -2,6 +2,8 @@
 
 Nuevo sketch [minirevolveri2c.ino](minirevolveri2c.ino), dirección **0x30**, para el bus **I2C 1 del central**. Mantiene el sketch original en `minirevolver` como referencia. El módulo usa su propio `Wire` en modo dispositivo; no necesita dos buses para recibir órdenes y responder.
 
+La plataforma propuesta para este módulo es **ESP32-S3**, igual que para la central y los demás módulos nuevos. Seleccionar la columna S3 de la tabla siguiente. Las ramas para ESP32 clásico y C3 se conservan como compatibilidad del código, no como la elección de hardware del nuevo sistema.
+
 Requiere **ESP_FlexyStepper**. Se revisó la API pública del repositorio del autor; verificar que la versión instalada incluya `setTargetPositionInSteps`, `setTargetPositionRelativeInSteps`, `processMovement`, `motionComplete`, `emergencyStop` y `setCurrentPositionAsHomeAndStop`. No se compiló ni se probó este nuevo sketch en hardware.
 
 ## Pines según la placa seleccionada

@@ -2,6 +2,8 @@
 
 Nuevo sketch [centralI2C.ino](centralI2C.ino) para la [propuesta modular](../sistemasI2C/README.md). No reemplaza el `ventiladorFlujo` confirmado en ESP32-C3. No compilado ni probado en hardware por el asistente.
 
+La central se propone como **interfaz de usuario y coordinador**, con **ESP32-S3 también en todos los módulos**. La interfaz implementada hoy es el monitor USB serial. Pantalla, controles físicos o interfaz web quedan por definir. Este primer firmware conserva AFM3000 y PWM en la central; trasladarlos a un módulo S3 de flujo es una ampliación propuesta, todavía no implementada.
+
 ## Archivos
 
 | Archivo | Responsabilidad |

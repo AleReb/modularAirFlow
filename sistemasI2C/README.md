@@ -13,7 +13,9 @@ Ejemplos nuevos para probar una arquitectura modular. No sustituyen los sketches
 
 I2C ya es una comunicación serial y bidireccional. Un bus admite varios dispositivos en paralelo; no hace falta un bus por módulo. El central inicia las transacciones: escribe órdenes y consulta las respuestas. El módulo no envía datos espontáneamente; una línea adicional de interrupción sería una ampliación opcional.
 
-El ESP32-S3 tiene dos controladores I2C. Aquí se separan sensores y módulos para tener dos buses físicos independientes. El ESP32-C3 puede funcionar como módulo con un solo bus. Otro central con dos controladores también es posible, pero el sketch entregado para el central exige S3.
+La propuesta de hardware usa **ESP32-S3 tanto en la central como en todos los módulos**. La central será la interfaz de usuario y el coordinador. El S3 tiene dos controladores I2C; aquí se separan sensores locales y módulos en dos buses físicos independientes. No es obligatorio utilizar los dos controladores de cada módulo.
+
+Esta documentación describe la primera integración disponible: AFM3000 y ventilador todavía conectados a la central, y minirevolver remoto. La arquitectura objetivo del [README principal](../README.md) propone separar después el flujo en otro módulo S3; ese firmware no está implementado. El monitor USB es la interfaz actual, sin interfaz gráfica todavía.
 
 ## Distribución
 
@@ -22,7 +24,7 @@ flowchart LR
   PC[Monitor USB] <--> S3[ESP32-S3 central]
   S3 <-->|I2C 0: GPIO8 SDA / GPIO9 SCL| NIV[Conversor I2C 3,3 V a 5 V]
   NIV <--> AFM[AFM3000: 0x40]
-  S3 <-->|I2C 1: GPIO10 SDA / GPIO11 SCL| REV[Micro del minirevolver: 0x30]
+  S3 <-->|I2C 1: GPIO10 SDA / GPIO11 SCL| REV[ESP32-S3 minirevolver: 0x30]
   REV --> DRV[Driver STEP/DIR]
   SW[Final de carrera] --> REV
   S3 -->|PWM GPIO7| FAN[BTS7960 y ventilador]
