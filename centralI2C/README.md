@@ -2,7 +2,7 @@
 
 Nuevo sketch [centralI2C.ino](centralI2C.ino) para la [propuesta modular](../sistemasI2C/README.md). No reemplaza el `ventiladorFlujo` confirmado en ESP32-C3. No compilado ni probado en hardware por el asistente.
 
-La central se propone como **interfaz de usuario y coordinador**, con **ESP32-S3 también en todos los módulos**. La interfaz implementada hoy es el monitor USB serial. Pantalla, controles físicos o interfaz web quedan por definir. Este primer firmware conserva AFM3000 y PWM en la central; trasladarlos a un módulo S3 de flujo es una ampliación propuesta, todavía no implementada.
+La central integra **sensor de flujo AFM3000, control del motor/ventilador, interfaz de usuario y coordinación**, con **ESP32-S3 también en todos los módulos**. La interfaz implementada hoy es el monitor USB serial. Pantalla, controles físicos o interfaz web quedan por definir. Todos los módulos externos, incluidos los sensores extra y el minirevolver, se conectan como esclavos al segundo I2C.
 
 ## Archivos
 
@@ -21,16 +21,16 @@ ESP32-S3, Arduino-ESP32 **2.0.17**, USB nativo, **USB CDC On Boot activado**, mo
 
 | Función | GPIO S3 |
 | --- | --- |
-| I2C 0 SDA: AFM3000 | 8 |
-| I2C 0 SCL: AFM3000 | 9 |
-| I2C 1 SDA: módulos | 10 |
-| I2C 1 SCL: módulos | 11 |
+| I2C 0 SDA: AFM3000 | 6 |
+| I2C 0 SCL: AFM3000 | 7 |
+| I2C 1 SDA: módulos | 8 |
+| I2C 1 SCL: módulos | 9 |
 | BTS7960 R_EN | 4 |
 | BTS7960 L_EN | 5 |
-| BTS7960 RPWM: siempre LOW | 6 |
-| BTS7960 LPWM: PWM manual | 7 |
+| BTS7960 RPWM: siempre LOW | 10 |
+| BTS7960 LPWM: PWM manual | 11 |
 
-**Estos pines son nuevos:** GPIO9 aquí es SCL del sensor, no PWM. No copiar el cableado del C3 anterior. Conectar AFM3000 mediante conversor I2C 3,3/5 V, y el minirevolver por I2C de 3,3 V. Ver [cableado y buses](../sistemasI2C/README.md).
+**El cableado cambia:** GPIO6/7 son SDA/SCL del primer I2C y GPIO8/9 del segundo. RPWM/LPWM pasan a GPIO10/11 para liberar los buses. No copiar el cableado del C3 anterior. Conectar AFM3000 mediante conversor I2C 3,3/5 V, y el minirevolver por I2C de 3,3 V. Ver [cableado y buses](../sistemasI2C/README.md).
 
 ## Comandos
 

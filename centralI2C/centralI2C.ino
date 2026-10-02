@@ -18,7 +18,8 @@
 #include "I2C0Sensores.h"
 #include "I2C1Modulos.h"
 
-constexpr int R_EN = 4, L_EN = 5, RPWM = 6, LPWM = 7;
+// GPIO6/7 y GPIO8/9 quedan reservados para los dos buses I2C.
+constexpr int R_EN = 4, L_EN = 5, RPWM = 10, LPWM = 11;
 int pwmActual = 0;
 uint32_t consultaMs = 0, reporteMs = 0;
 char linea[64];
@@ -107,7 +108,7 @@ void setup() {
   modulosListos = busModulos.begin(MODULOS_SDA, MODULOS_SCL, 100000);
   if (sensoresListos) busSensores.setTimeOut(100);
   if (modulosListos) busModulos.setTimeOut(100);
-  Serial.println("Central S3: sensor bus0 GPIO8/9; modulos bus1 GPIO10/11.");
+  Serial.println("Central S3: sensor bus0 SDA6/SCL7; modulos bus1 SDA8/SCL9; PWM GPIO11.");
   if (!sensoresListos || !modulosListos) Serial.println("Revisar inicializacion de buses I2C.");
   ayuda();
 }

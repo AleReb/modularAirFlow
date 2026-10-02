@@ -1,7 +1,7 @@
 #pragma once
-// Bus fisico I2C 0: AFM3000 y futuros sensores.
+// Bus fisico I2C 0 principal: AFM3000 local de la central.
 TwoWire busSensores(0);
-constexpr int SENSOR_SDA = 8, SENSOR_SCL = 9;
+constexpr int SENSOR_SDA = 6, SENSOR_SCL = 7;
 constexpr uint8_t AFM3000 = 0x40;
 bool sensoresListos = false;
 bool flujoValido = false, descartarPrimera = true;

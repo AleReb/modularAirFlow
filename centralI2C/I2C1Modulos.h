@@ -1,7 +1,7 @@
 #pragma once
 // Bus fisico I2C 1: minirevolver 0x30 y futuros modulos.
 TwoWire busModulos(1);
-constexpr int MODULOS_SDA = 10, MODULOS_SCL = 11;
+constexpr int MODULOS_SDA = 8, MODULOS_SCL = 9;
 bool modulosListos = false;
 uint8_t estado[TAM_ESTADO] = {};
 bool moduloValido = false;

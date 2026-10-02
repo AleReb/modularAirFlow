@@ -1,30 +1,31 @@
 # Minirevolver como módulo I2C
 
-Nuevo sketch [minirevolveri2c.ino](minirevolveri2c.ino), dirección **0x30**, para el bus **I2C 1 del central**. Mantiene el sketch original en `minirevolver` como referencia. El módulo usa su propio `Wire` en modo dispositivo; no necesita dos buses para recibir órdenes y responder.
+Nuevo sketch [minirevolveri2c.ino](minirevolveri2c.ino), dirección **0x30**, para el bus **I2C 1 del central**. Mantiene el sketch original en `minirevolver` como referencia. El módulo usa `TwoWire(1)` en modo esclavo, SDA GPIO8 y SCL GPIO9. El primer I2C queda reservado en GPIO6/7 para periféricos locales futuros y no se inicializa en este sketch.
 
-La plataforma propuesta para este módulo es **ESP32-S3**, igual que para la central y los demás módulos nuevos. Seleccionar la columna S3 de la tabla siguiente. Las ramas para ESP32 clásico y C3 se conservan como compatibilidad del código, no como la elección de hardware del nuevo sistema.
+La plataforma de este módulo es **ESP32-S3**, igual que la central y todos los módulos nuevos. El sketch requiere seleccionar S3; los ejemplos anteriores permanecen en sus carpetas de referencia.
 
 Requiere **ESP_FlexyStepper**. Se revisó la API pública del repositorio del autor; verificar que la versión instalada incluya `setTargetPositionInSteps`, `setTargetPositionRelativeInSteps`, `processMovement`, `motionComplete`, `emergencyStop` y `setCurrentPositionAsHomeAndStop`. No se compiló ni se probó este nuevo sketch en hardware.
 
-## Pines según la placa seleccionada
+## Pines ESP32-S3
 
-| Señal | ESP32 clásico | ESP32-C3 | ESP32-S3 |
-| --- | --- | --- | --- |
-| STEP | 5 | 5 | 5 |
-| DIR | 23 | 6 | 6 |
-| HOME | 27 | 7 | 7 |
-| SDA | 21 | 0 | 10 |
-| SCL | 22 | 1 | 11 |
+| Señal | GPIO |
+| --- | --- |
+| STEP | 5 |
+| DIR | 10 |
+| HOME | 11 |
+| I2C 1 SDA: enlace esclavo | 8 |
+| I2C 1 SCL: enlace esclavo | 9 |
+| I2C 0 SDA/SCL: reservado, sin inicializar | 6 / 7 |
 
-La rama ESP32 clásico conserva los pines de motor del ejemplo original. C3/S3 usan una asignación nueva, seleccionada por la placa al compilar. Verificar disponibilidad física y usos propios de cada placa.
+DIR y HOME pasan a GPIO10/11 para reservar GPIO6/7 para el primer I2C. Verificar disponibilidad física y usos propios de la placa.
 
-Conectar **SDA del módulo a GPIO10 del central S3**, **SCL del módulo a GPIO11 del central** y GND común. No cruzar SDA/SCL. Bus a **100 kHz y lógica de 3,3 V**, con pull-ups según [la propuesta](../sistemasI2C/README.md). Cada placa puede usar números de GPIO distintos para la misma señal del cable.
+Conectar **GPIO8 SDA del módulo a GPIO8 SDA del central S3**, **GPIO9 SCL del módulo a GPIO9 SCL del central** y GND común. No cruzar SDA/SCL. Bus a **100 kHz y lógica de 3,3 V**, con pull-ups según [la propuesta](../sistemasI2C/README.md).
 
 HOME está configurado como `INPUT_PULLUP`, contacto normalmente abierto hacia GND y activo LOW. La alimentación del motor, la corriente y los micropasos se configuran en su driver. Este código no maneja un pin ENABLE del driver.
 
 ## Ejecución local y respuesta
 
-El central manda `REV HOME`, `REV POS n`, `REV MOVE pasos` o `REV STOP`. El módulo responde con posición estimada, destino, flags y resultado. No usa comandos locales por serial; ese puerto solo informa el arranque a 115200. Para leerlo en C3/S3 con USB nativo, activar USB CDC On Boot.
+El central manda `REV HOME`, `REV POS n`, `REV MOVE pasos` o `REV STOP`. El módulo responde con posición estimada, destino, flags y resultado. No usa comandos locales por serial; ese puerto solo informa el arranque a 115200. Para leerlo en S3 con USB nativo, activar USB CDC On Boot.
 
 El movimiento se ejecuta en `loop()` con `processMovement`, sin llamadas de movimiento bloqueantes. Los callbacks I2C solo copian órdenes o una instantánea del estado. Así puede contestar mientras el motor gira. Velocidad de ejemplo: **150 pasos/s**, aceleración **500 pasos/s²**, desaceleración **250 pasos/s²**; el bucle cede CPU durante 1 ms. Este ejemplo no está dimensionado para altas tasas de pasos.
 
@@ -43,6 +44,6 @@ La [especificación del protocolo](../sistemasI2C/README.md#protocolo-versión-1
 
 El buzón admite una orden pendiente; una parada puede reemplazarla. El central debe esperar la confirmación antes de mandar otra orden normal. Una orden descartada por buzón lleno no recibe confirmación de aplicación. No hay eliminación de duplicados ni reenvío automático. Una pérdida del bus no detiene el movimiento local ya aceptado: continúa hasta su destino o límite de búsqueda.
 
-Para ESP32 clásico se precarga la primera respuesta mediante `Wire.slaveWrite`, como el ejemplo oficial del core 2.0.17. Puede verse un estado anterior durante una consulta; la lectura periódica permite recibir el siguiente. Comprobar esta comunicación con las versiones y placas reales antes de integrar la mecánica.
+La respuesta es una instantánea publicada por el bucle; puede verse un estado anterior durante una consulta y la lectura periódica permite recibir el siguiente. Comprobar esta comunicación con las versiones y placas reales antes de integrar la mecánica.
 
 Guardar los archivos sin BOM. Compilación y carga a cargo del usuario.

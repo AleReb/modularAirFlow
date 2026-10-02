@@ -5,20 +5,14 @@
 #include <string.h>
 #include "Protocolo.h"
 
-#if defined(CONFIG_IDF_TARGET_ESP32)
-// ESP32 clasico: conserva STEP/DIR/HOME del sketch original.
-constexpr int STEP_PIN = 5, DIR_PIN = 23, HOME_PIN = 27;
-constexpr int SDA_PIN = 21, SCL_PIN = 22;
-#elif defined(CONFIG_IDF_TARGET_ESP32C3)
-// Asignacion propuesta para C3: requiere recablear el modulo.
-constexpr int STEP_PIN = 5, DIR_PIN = 6, HOME_PIN = 7;
-constexpr int SDA_PIN = 0, SCL_PIN = 1;
-#elif defined(CONFIG_IDF_TARGET_ESP32S3)
-constexpr int STEP_PIN = 5, DIR_PIN = 6, HOME_PIN = 7;
-constexpr int SDA_PIN = 10, SCL_PIN = 11;
-#else
-#error "Ejemplo previsto para ESP32, ESP32-C3 o ESP32-S3."
+#if !defined(CONFIG_IDF_TARGET_ESP32S3)
+#error "Selecciona ESP32-S3 para el modulo minirevolver."
 #endif
+
+// Primer I2C reservado en GPIO6/7; enlace esclavo en el segundo I2C.
+constexpr int STEP_PIN = 5, DIR_PIN = 10, HOME_PIN = 11;
+constexpr int SDA_PIN = 8, SCL_PIN = 9;
+TwoWire busModulos(1);
 
 constexpr int HOME_ACTIVO = LOW; // Contacto normalmente abierto hacia GND.
 constexpr long MAX_HOME = 2000;
@@ -55,8 +49,8 @@ void publicarEstado() {
 void recibir(int cantidad) {
   uint8_t p[TAM_ORDEN];
   size_t n = 0;
-  while (Wire.available()) {
-    int dato = Wire.read();
+  while (busModulos.available()) {
+    int dato = busModulos.read();
     if (n < TAM_ORDEN) p[n] = uint8_t(dato);
     ++n;
   }
@@ -78,7 +72,7 @@ void responder() {
   portENTER_CRITICAL(&buzonMux);
   memcpy(p, estadoPublicado, TAM_ESTADO);
   portEXIT_CRITICAL(&buzonMux);
-  Wire.write(p, TAM_ESTADO);
+  busModulos.write(p, TAM_ESTADO);
 }
 
 void pararAhora() {
@@ -126,16 +120,12 @@ void setup() {
   motor.setAccelerationInStepsPerSecondPerSecond(500);
   motor.setDecelerationInStepsPerSecondPerSecond(250);
   publicarEstado();
-  Wire.onReceive(recibir);
-  Wire.onRequest(responder);
-  if (!Wire.begin(uint8_t(DIRECCION_REVOLVER), SDA_PIN, SCL_PIN, uint32_t(100000))) {
+  busModulos.onReceive(recibir);
+  busModulos.onRequest(responder);
+  if (!busModulos.begin(uint8_t(DIRECCION_REVOLVER), SDA_PIN, SCL_PIN, uint32_t(100000))) {
     Serial.println("No se pudo iniciar I2C del modulo.");
   }
-#if defined(CONFIG_IDF_TARGET_ESP32)
-  // El ESP32 clasico requiere precargar la primera respuesta.
-  Wire.slaveWrite(estadoPublicado, TAM_ESTADO);
-#endif
-  Serial.println("Minirevolver I2C 0x30. Esperando ordenes; sin movimiento al arrancar.");
+  Serial.println("Minirevolver S3 esclavo I2C1 SDA8/SCL9, 0x30. Esperando ordenes; sin movimiento al arrancar.");
 }
 
 void loop() {
