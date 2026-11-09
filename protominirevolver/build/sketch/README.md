@@ -1,4 +1,4 @@
-#line 1 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/README.md"
+#line 1 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\README.md"
 # Prototipo minirevolver: pines del PCB central
 
 Asignación tomada del esquema [untitled.sch](../pcb/revolver/untitled.sch) y contrastada con las conexiones del PCB [untitled.brd](../pcb/revolver/untitled.brd), en `pcb/revolver`. El controlador es **U1: ESP32-S3 SuperMini TH**.
@@ -31,6 +31,28 @@ Una vez referenciado, `1`, `2`, `3` seleccionan 150, 350 y 550 pasos absolutos, 
 El movimiento se procesa en `loop()`, sin servicio de motor en segundo plano. Los callbacks I2C solo copian tramas. Se usa una extensión del protocolo de `minirevolveri2c`, **versión 2**: orden de 10 bytes, estado de 22 bytes, CRC8 y secuencia. Actualizar también el maestro: el protocolo versión 1 de los otros ejemplos no es compatible con este estado ampliado. Una respuesta de aceptación no significa que el movimiento terminó: observar `moviendo=0` y `homing=0`. Durante un movimiento se rechazan nuevas órdenes de HOME/MOVER con `OCUPADO`; STOP puede reemplazar una orden pendiente. Si STOP interrumpe homing se pierde el origen. Una pérdida de I2C no cancela un movimiento ya aceptado.
 
 El bus POGO funciona a 100 kHz con señales de 3,3 V. BTNA queda sin usar. X1/X2 comparten el bus interno del RTC; no se consultan otros dispositivos ni la memoria AT24C32 del módulo.
+
+## Consola USB del propio revolver
+
+Abrir el monitor serie a **115200** y enviar cada comando con **Enter / Nueva linea** (acepta LF, CR o CRLF). La consola funciona junto con el slave POGO; no hace falta conectar el maestro. Acepta mayusculas o minusculas.
+
+| Comando | Accion |
+| --- | --- |
+| `h` o `?` | Mostrar ayuda. |
+| `h11:11:11` | Ajustar solo la hora, formato `hHH:MM:SS` de 24 horas, conservando la fecha valida del RTC. |
+| `HOME` | Buscar el origen del motor. En esta consola `h` significa ayuda. |
+| `S` o `STOP` | Parar el movimiento. |
+| `M 350` | Mover a una posicion absoluta entre 0 y 2000 pasos; requiere HOME previo. |
+| `1`, `2`, `3` | Mover a 150, 350 o 550 pasos. |
+| `E` o `RTC` | Mostrar estado y fecha/hora. |
+| `RTC 1794222000` | Ajustar fecha y hora completas mediante segundos Unix UTC. El numero es un ejemplo, no la hora actual. |
+| `SD` | Remontar la tarjeta y probar el registro. |
+
+La hora se mantiene en **UTC**, igual que el protocolo POGO y los registros; `hHH:MM:SS` no aplica conversion de zona horaria. Si el RTC perdio alimentacion o su fecha no es valida, inicializar con `RTC unixUTC` antes de ajustar solo la hora. Con `hora_valida=0`, ignorar la fecha/hora mostrada. No se inventa una fecha ni se utiliza automaticamente la de compilacion.
+
+Las ordenes usan las mismas comprobaciones del control POGO: RTC/SD se rechazan durante movimiento y MOVER requiere origen. Una respuesta `OK` a HOME/MOVER indica aceptacion; consultar `E` para ver si termino. La entrada se lee incrementalmente, como maximo 16 caracteres y una orden por vuelta, sin esperar por una linea completa. Una linea demasiado larga se descarta hasta Enter. Las respuestas se transmiten desde una cola acotada, sin esperar por USB; si se llena, se pueden perder mensajes. Se conserva el diagnostico periodico cada 5 segundos.
+
+Una orden POGO disponible tiene prioridad en esa vuelta. Las ordenes seriales se registran como `SERIAL` y no sustituyen la secuencia ni el resultado de confirmacion del maestro; el estado fisico del motor y perifericos es compartido entre ambas interfaces.
 
 ## RTC y tarjeta SD
 

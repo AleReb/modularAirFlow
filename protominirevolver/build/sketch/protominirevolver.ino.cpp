@@ -1,4 +1,4 @@
-#line 1 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 1 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 // Modulo I2C: recibe ordenes y genera los pasos localmente.
 #include <Arduino.h>
 #include <Wire.h>
@@ -26,6 +26,7 @@ ESP_FlexyStepper motor;
 portMUX_TYPE buzonMux = portMUX_INITIALIZER_UNLOCKED;
 uint8_t buzon[TAM_ORDEN];
 bool pendiente = false;
+bool pogo = false; // Controlador I2C iniciado; no indica conexion fisica al maestro.
 uint8_t estadoPublicado[TAM_ESTADO] = {};
 bool tramaMala = false;
 bool referenciado = false;
@@ -34,23 +35,23 @@ uint8_t resultado = RESULTADO_OK, ultimaSecuencia = 0;
 uint8_t secuenciaMovimiento = 0, operacionMovimiento = 0;
 uint32_t ultimoEstado = 0;
 
-#line 36 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 37 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void publicarEstado();
-#line 59 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 60 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void recibir(int cantidad);
-#line 80 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 81 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void responder();
-#line 88 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 89 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void pararAhora();
-#line 93 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 94 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void habilitarMotor();
-#line 98 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 99 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void ejecutar(const uint8_t *p);
-#line 150 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 153 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void setup();
-#line 172 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 181 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void loop();
-#line 36 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/protominirevolver.ino"
+#line 37 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\protominirevolver.ino"
 void publicarEstado() {
   uint8_t p[TAM_ESTADO] = {0x5A, VERSION_PROTOCOLO};
   if (!motor.motionComplete()) p[2] |= FLAG_MOVIENDO;
@@ -165,6 +166,8 @@ void ejecutar(const uint8_t *p) {
   }
 }
 
+#include "Consola.h"
+
 void setup() {
   // Deshabilitado al arrancar; se habilita al aceptar HOME o MOVER.
   digitalWrite(ENA_PIN, !ENA_ACTIVO);
@@ -182,12 +185,34 @@ void setup() {
   Wire.onRequest(responder);
   if (!Wire.begin(uint8_t(DIRECCION_REVOLVER), SDA_PIN, SCL_PIN, uint32_t(100000))) {
     Serial.println("No se pudo iniciar I2C POGO; motor deshabilitado.");
-    while (true) delay(1000);
+    pogo = false;
+    //while (true) delay(1000);
+  }else{
+    pogo = true;
   }
   Serial.println("Prototipo slave 0x30: POGO SDA=6 SCL=7; STEP=3 DIR=4 ENA=2 HOME=1.");
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial.setTxTimeoutMs(0); // En loop, descartar diagnostico antes que esperar por USB.
+#endif
 }
 
 void loop() {
+  // Sin esperar al monitor serie ni llenar su buffer. Estados de la ultima consulta.
+  static uint32_t ultimoDiagnostico = 0;
+  if (millis() - ultimoDiagnostico >= 5000) {
+    ultimoDiagnostico = millis();
+    if (Serial) {
+      char diagnostico[128];
+      int n = snprintf(diagnostico, sizeof(diagnostico),
+                       "[loop] ms=%lu I2C_iniciado=%u HOME=%u RTC=%u hora_valida=%u SD=%u error_SD=%u mov=%u\n",
+                       static_cast<unsigned long>(millis()), unsigned(pogo),
+                       unsigned(digitalRead(HOME_PIN) == HOME_ACTIVO), unsigned(rtcListo),
+                       unsigned(horaValida), unsigned(sdLista), unsigned(errorSD),
+                       unsigned(!motor.motionComplete() || faseHome));
+      if (n > 0 && size_t(n) < sizeof(diagnostico) && Serial.availableForWrite() >= n)
+        Serial.write(reinterpret_cast<const uint8_t *>(diagnostico), size_t(n));
+    }
+  }
   uint8_t p[TAM_ORDEN];
   bool hayOrden;
   portENTER_CRITICAL(&buzonMux);
@@ -202,6 +227,9 @@ void loop() {
     registrarEvento("ORDEN", ultimaSecuencia, p[2], resultado,
                     motor.getCurrentPositionInSteps(), motor.getTargetPositionInSteps());
   }
+  // Una orden POGO por vuelta tiene prioridad sobre la entrada de consola.
+  if (!hayOrden) atenderConsola();
+  transmitirConsola();
   bool estabaMoviendo = !motor.motionComplete() || faseHome;
 
   if (faseHome == 1 && digitalRead(HOME_PIN) != HOME_ACTIVO) {

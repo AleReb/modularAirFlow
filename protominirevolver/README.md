@@ -23,13 +23,69 @@ Seleccionar ESP32-S3 en Arduino e instalar `ESP_FlexyStepper` y **RTClib de Adaf
 
 El firmware asume **ENA activo LOW**. Si el driver conectado habilita con HIGH, cambiar `ENA_ACTIVO` antes de probar. Arranca sin movimiento y con ENA deshabilitado; al aceptar HOME o un movimiento lo habilita y lo mantiene habilitado para conservar par al terminar. STOP detiene los pulsos y mantiene ENA; no desconecta potencia.
 
-Primero ejecutar `H` desde el maestro. Si HOME ya está activo, se retira hasta liberarlo, con límite de 200 pasos; después busca en sentido negativo hasta 2000 pasos. Al detectar HOME fija cero. Si no lo encuentra o no logra liberarlo, informa `HOME_NO_ENCONTRADO`. No hay homing automático al encender. No implementa filtrado de rebotes ni doble aproximación.
+Primero ejecutar `HOME` desde el maestro. Si HOME ya está activo, se retira hasta liberarlo, con límite de 200 pasos; después busca en sentido negativo hasta 2000 pasos. Al detectar HOME fija cero. Si no lo encuentra o no logra liberarlo, informa `HOME_NO_ENCONTRADO`. No hay homing automático al encender. No implementa filtrado de rebotes ni doble aproximación.
 
 Una vez referenciado, `1`, `2`, `3` seleccionan 150, 350 y 550 pasos absolutos, como en el ejemplo original. `M pasos` permite destinos absolutos de 0 a 2000. Velocidad: 150 pasos/s; aceleración: 500 pasos/s²; desaceleración: 250 pasos/s². Los límites son provisionales y deben ajustarse a la mecánica. La posición se calcula con los pasos enviados; no hay encoder.
 
 El movimiento se procesa en `loop()`, sin servicio de motor en segundo plano. Los callbacks I2C solo copian tramas. Se usa una extensión del protocolo de `minirevolveri2c`, **versión 2**: orden de 10 bytes, estado de 22 bytes, CRC8 y secuencia. Actualizar también el maestro: el protocolo versión 1 de los otros ejemplos no es compatible con este estado ampliado. Una respuesta de aceptación no significa que el movimiento terminó: observar `moviendo=0` y `homing=0`. Durante un movimiento se rechazan nuevas órdenes de HOME/MOVER con `OCUPADO`; STOP puede reemplazar una orden pendiente. Si STOP interrumpe homing se pierde el origen. Una pérdida de I2C no cancela un movimiento ya aceptado.
 
 El bus POGO funciona a 100 kHz con señales de 3,3 V. BTNA queda sin usar. X1/X2 comparten el bus interno del RTC; no se consultan otros dispositivos ni la memoria AT24C32 del módulo.
+
+## Consola USB del propio revolver
+
+Abrir el monitor serie a **115200** y enviar cada comando con **Enter / Nueva linea** (acepta LF, CR o CRLF). La consola funciona junto con el slave POGO; no hace falta conectar el maestro. Acepta mayusculas o minusculas.
+
+| Comando | Accion |
+| --- | --- |
+| `h` o `?` | Mostrar ayuda, incluyendo como inicializar fecha y hora. |
+| `f09/11/2026` | Fijar fecha con `fDD/MM/AAAA` (2000..2099); conserva hora valida o inicia a las 00:00:00. |
+| `h11:11:11` | Ajustar solo la hora, formato `hHH:MM:SS` de 24 horas, conservando la fecha valida del RTC. |
+| `HOME` | Buscar el origen del motor. En esta consola `h` significa ayuda. |
+| `S` o `STOP` | Parar el movimiento. |
+| `M 350` | Mover a una posicion absoluta entre 0 y 2000 pasos; requiere HOME previo. |
+| `1`, `2`, `3` | Mover a 150, 350 o 550 pasos. |
+| `E` o `RTC` | Mostrar estado y fecha/hora. |
+| `RTC 1794222000` | Ajustar fecha y hora completas mediante segundos Unix UTC. El numero es un ejemplo, no la hora actual. |
+| `SD` | Remontar la tarjeta y probar el registro. |
+
+La hora se mantiene en **UTC**, igual que el protocolo POGO y los registros; `hHH:MM:SS` no aplica conversion de zona horaria. Si el RTC perdio alimentacion o su fecha no es valida, inicializar con `fDD/MM/AAAA` y luego `hHH:MM:SS`. `RTC unixUTC` sigue disponible como alternativa. Con `hora_valida=0`, ignorar la fecha/hora mostrada. No se inventa una fecha ni se utiliza automaticamente la de compilacion.
+
+Las ordenes usan las mismas comprobaciones del control POGO: RTC/SD se rechazan durante movimiento y MOVER requiere origen. Una respuesta `OK` a HOME/MOVER indica aceptacion; consultar `E` para ver si termino. La entrada se lee incrementalmente, como maximo 16 caracteres y una orden por vuelta, sin esperar por una linea completa. Una linea demasiado larga se descarta hasta Enter. Las respuestas se transmiten desde una cola acotada, sin esperar por USB; si se llena, se pueden perder mensajes. Cada 5 segundos muestra fecha DD/MM/AAAA, hora HH:MM:SS, posicion actual y destino en pasos, movimiento y estado de perifericos. Si la fecha no es valida muestra guiones. Durante movimiento extrapola la hora sin consultar el RTC.
+
+Una orden POGO disponible tiene prioridad en esa vuelta. Las ordenes seriales se registran como `SERIAL` y no sustituyen la secuencia ni el resultado de confirmacion del maestro; el estado fisico del motor y perifericos es compartido entre ambas interfaces.
+
+### Inicializar fecha y hora en formato humano (USB o maestro I2C)
+
+Con el motor detenido, monitor a **115200** y **Nueva linea**, enviar una orden por vez y esperar su respuesta:
+
+```text
+h
+f09/11/2026
+h11:11:11
+RTC
+```
+
+`h` muestra la ayuda. Los valores son ejemplos: sustituirlos por la fecha y hora deseadas. `fDD/MM/AAAA` admite fechas reales entre 2000 y 2099, incluyendo anos bisiestos. Por ejemplo, rechaza `f31/04/2026` y `f29/02/2025`.
+
+Si el RTC no tenia fecha/hora valida, `f09/11/2026` lo inicializa al **09/11/2026 a las 00:00:00**. Si ya era valido, conserva su hora. Luego `h11:11:11` fija las **11:11:11** sin cambiar la fecha. La hora admite `h00:00:00`..`h23:59:59`, sin espacios y con dos digitos por campo. `RTC` permite verificar `hora_valida=1` (en el maestro se muestra como `horaValida=1`).
+
+Si se envia la hora antes de inicializar una fecha confiable, responde:
+
+```text
+Fecha no confiable: enviar fDD/MM/AAAA y luego hHH:MM:SS.
+```
+
+Por I2C se devuelve `FECHA_NO_VALIDA=9`. Si responde `OCUPADO`, esperar a que el motor termine o detenerlo con `S`. Si responde `RTC_NO_DISPONIBLE`, revisar el RTC y su conexion.
+
+El reloj conserva la convencion **UTC** del protocolo y del CSV: no convierte automaticamente la hora local. Por ejemplo, las 15:05 en UTC-4 corresponden a `h19:05:00`. Si la conversion cambia el dia, ingresar tambien la fecha UTC correcta con `f`.
+
+Como alternativa, `RTC unixUTC` sigue ajustando fecha y hora completas. PowerShell puede generar ese comando con la hora actual del PC:
+
+```powershell
+"RTC $([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+```
+
+Copiar enseguida el resultado al monitor serie. Para controlar por I2C, cargar tambien el [maestro actualizado](../protominirevolvermaster/README.md): acepta los mismos comandos `f`, `hHH:MM:SS`, `HOME`, `M pasos`, `S`, `E`, `RTC` y `SD`. **`h`/`H` ahora muestra ayuda en ambas consolas; usar `HOME` para buscar origen.**
 
 ## RTC y tarjeta SD
 
@@ -40,6 +96,7 @@ La **SD usa SPI** con **CS=10, MOSI=11, CLK=12 y MISO=13**, inicialmente a 4 MHz
 Desde el maestro:
 
 - `E` o `RTC`: muestra detección del RTC, validez de hora, segundos Unix UTC, estado de SD y cantidad de registros descartados.
+- `f09/11/2026` y luego `h11:11:11`: ajustar fecha y hora en formato humano, esperando confirmacion entre ordenes.
 - `RTC 1794222000`: ejemplo de ajuste a 2026-11-09 11:00:00 UTC. Reemplazar por el timestamp UTC deseado; rango admitido 2000..2099. El RTC no aplica huso horario ni horario de verano.
 - `SD`: vuelve a montar la SD y prueba una escritura en el archivo de registro. No borra ni formatea.
 
@@ -66,7 +123,23 @@ Los comandos de ajustar RTC y probar SD devuelven `OCUPADO` durante movimiento. 
 | 17..20 | Eventos descartados uint32, little endian |
 | 21 | CRC8 de los bytes 0..20 |
 
-Las órdenes conservan 10 bytes: cabecera `0xA5`, versión, operación, secuencia, argumento de 4 bytes little endian, reservado=0 y CRC8 de los primeros 9 bytes. Operaciones: MOVER=1, HOME=2, PARAR=3, AJUSTAR_RTC=4 (argumento Unix uint32), PROBAR_SD=5. Resultados añadidos: RTC_NO_DISPONIBLE=7 y ERROR_SD=8. El argumento de MOVER conserva interpretación int32 y rango 0..2000.
+Las órdenes conservan 10 bytes: cabecera `0xA5`, versión, operación, secuencia, argumento de 4 bytes little endian, reservado=0 y CRC8 de los primeros 9 bytes. Operaciones: MOVER=1, HOME=2, PARAR=3, AJUSTAR_RTC=4 (argumento Unix uint32), PROBAR_SD=5, AJUSTAR_FECHA=6 y AJUSTAR_HORA=7. Resultados añadidos: RTC_NO_DISPONIBLE=7, ERROR_SD=8 y FECHA_NO_VALIDA=9. El argumento de MOVER conserva interpretación int32 y rango 0..2000.
+
+### Fecha, hora y posicion por I2C
+
+El transporte POGO sigue siendo **binario**, no texto ASCII. El maestro convierte los comandos humanos a tramas de 10 bytes; no enviar directamente la cadena `f09/11/2026` con `Wire.write`. Se conserva version 2 y el estado de 22 bytes: las operaciones nuevas amplian el protocolo sin cambiar los campos anteriores. Un slave anterior no entiende las operaciones 6 y 7; actualizar ambos sketches y sus `Protocolo.h`.
+
+| Accion | Operacion | Argumento en bytes 4..7, little endian |
+| --- | --- | --- |
+| Fecha `f09/11/2026` | 6 (AJUSTAR_FECHA) | uint32 decimal `20261109`, formato numerico AAAAMMDD. |
+| Hora `h11:11:11` | 7 (AJUSTAR_HORA) | uint32 `40271`, segundos desde medianoche (`hora*3600 + minuto*60 + segundo`). |
+| Destino `M 350` | 1 (MOVER) | int32 `350`, posicion absoluta en pasos; requiere HOME previo. |
+| Buscar origen `HOME` | 2 (HOME) | 0. |
+| Parar `S` | 3 (PARAR) | 0. |
+
+Para obtener la **posicion actual**, el maestro solicita 22 bytes a `0x30`, valida cabecera/version/CRC y decodifica `leerInt32(estado + 5)`. El destino esta en `leerInt32(estado + 9)` y fecha/hora UTC en `leerUint32(estado + 13)`. No se necesita enviar una orden de movimiento para consultar. La posicion es un conteo de pasos generado por el firmware, no una medicion por encoder; comprobar `FLAG_REFERENCIADO` para saber si se hizo HOME.
+
+El maestro consulta cada 250 ms para confirmar ordenes y muestra fecha, hora y posicion cada 5 segundos; `E` las muestra a pedido. El slave publica una instantanea aproximadamente cada 10 ms, salvo demoras de E/S. Los callbacks solo intercambian tramas; el ajuste del RTC se ejecuta desde `loop()` con el motor detenido.
 
 Las APIs se contrastaron con [RTClib DS3231 de Adafruit](https://github.com/adafruit/RTClib/blob/master/src/RTC_DS3231.cpp) y [SD de Arduino-ESP32](https://github.com/espressif/arduino-esp32/blob/2.0.17/libraries/SD/src/SD.h).
 
@@ -192,4 +265,4 @@ Este README describe el PCB existente. Los sketches actuales tienen otras asigna
 - [minirevolveri2c](../minirevolveri2c/README.md), para S3, usa STEP=5, DIR=6, HOME=7 y SDA/SCL=10/11. No controla ENA. En este PCB, STEP/DIR/ENA son 3/4/2, GPIO6/7 van al POGO y GPIO10/11 a la SD.
 - [centralI2C](../centralI2C/README.md) comparte SDA/SCL=8/9 con X1/X2, pero propone el segundo bus en 10/11 y control de ventilador en 4/5/6/7; esas funciones difieren del PCB.
 
-El nuevo sketch de esta carpeta adapta los pines al PCB: GPIO1 es HOME y el POGO es slave. BTNA sigue reservado. La polaridad ENA debe ajustarse al driver real. Esta integración de RTC y SD se revisó sin compilar, según lo solicitado. No se probó en hardware.
+El nuevo sketch de esta carpeta adapta los pines al PCB: GPIO1 es HOME y el POGO es slave. BTNA sigue reservado. La polaridad ENA debe ajustarse al driver real. Slave y maestro compilaron con Arduino-ESP32 2.0.17 para ESP32-S3. Se probaron en simulación de periféricos la validación de fechas/horas, las órdenes USB/I2C y el estado con posición; no se probó en hardware.

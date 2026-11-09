@@ -55,6 +55,31 @@ bool ajustarReloj(uint32_t epoch) {
   return horaValida && epochBase >= epoch && epochBase - epoch <= 1;
 }
 
+// Compartido por USB e I2C; ejecutar solo con el motor detenido.
+uint8_t ajustarFechaHumana(uint32_t fecha) {
+  if (!fechaPermitida(fecha)) return FUERA_RANGO;
+  leerReloj();
+  if (!rtcListo) return RTC_NO_DISPONIBLE;
+  DateTime anterior(horaUnix());
+  // Primera inicializacion: fecha indicada a las 00:00:00. Luego enviar hHH:MM:SS.
+  DateTime nueva(fecha / 10000, (fecha / 100) % 100, fecha % 100,
+                 horaValida ? anterior.hour() : 0,
+                 horaValida ? anterior.minute() : 0,
+                 horaValida ? anterior.second() : 0);
+  return ajustarReloj(nueva.unixtime()) ? RESULTADO_OK : RTC_NO_DISPONIBLE;
+}
+
+uint8_t ajustarHoraHumana(uint32_t segundos) {
+  if (segundos >= 86400) return FUERA_RANGO;
+  leerReloj();
+  if (!rtcListo) return RTC_NO_DISPONIBLE;
+  if (!horaValida) return FECHA_NO_VALIDA;
+  DateTime anterior(horaUnix());
+  DateTime nueva(anterior.year(), anterior.month(), anterior.day(),
+                 segundos / 3600, (segundos / 60) % 60, segundos % 60);
+  return ajustarReloj(nueva.unixtime()) ? RESULTADO_OK : RTC_NO_DISPONIBLE;
+}
+
 void registrarEvento(const char *nombre, uint8_t secuencia, uint8_t operacion,
                      uint8_t resultado, int32_t posicion, int32_t destino) {
   if (cantidadEventos == CAPACIDAD_EVENTOS) {

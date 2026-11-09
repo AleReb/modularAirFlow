@@ -16,22 +16,23 @@ constexpr int SDA_PIN = 6, SCL_PIN = 7;
 uint8_t secuencia = 0, secuenciaPendiente = 0;
 bool esperando = false;
 bool secuenciaInicializada = false;
-uint32_t envioMs = 0, consultaMs = 0;
+uint32_t envioMs = 0, consultaMs = 0, impresionMs = 0;
 char linea[48];
 size_t longitud = 0;
 bool desbordada = false;
 
 const char *nombreResultado(uint8_t valor) {
   switch (valor) {
-    case OK: return "OK";
+    case RESULTADO_OK: return "OK";
     case OCUPADO: return "OCUPADO";
     case FUERA_RANGO: return "FUERA_RANGO";
-    case SIN_ORIGEN: return "SIN_ORIGEN: ejecutar H";
+    case SIN_ORIGEN: return "SIN_ORIGEN: ejecutar HOME";
     case HOME_NO_ENCONTRADO: return "HOME_NO_ENCONTRADO";
     case OPERACION_INVALIDA: return "OPERACION_INVALIDA";
     case TRAMA_INVALIDA: return "TRAMA_INVALIDA";
     case RTC_NO_DISPONIBLE: return "RTC_NO_DISPONIBLE";
     case ERROR_SD: return "ERROR_SD";
+    case FECHA_NO_VALIDA: return "FECHA_NO_VALIDA: enviar fDD/MM/AAAA y luego hHH:MM:SS";
     default: return "DESCONOCIDO";
   }
 }
@@ -46,6 +47,28 @@ bool consultar(uint8_t *p) {
 }
 
 void mostrarEstado(const uint8_t *p) {
+  if (p[2] & FLAG_HORA_VALIDA) {
+    // Aritmetica uint32: tambien funciona despues de 2038 con cores time_t de 32 bits.
+    uint32_t epoch = leerUint32(p + 13);
+    uint32_t dias = (epoch - UNIX_MIN) / 86400;
+    unsigned anio = 2000, mes = 1;
+    while (dias >= unsigned(anio % 4 == 0 ? 366 : 365)) {
+      dias -= anio % 4 == 0 ? 366 : 365;
+      ++anio;
+    }
+    const uint8_t diasMes[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    while (mes < 12) {
+      unsigned limite = diasMes[mes - 1] + (mes == 2 && anio % 4 == 0);
+      if (dias < limite) break;
+      dias -= limite;
+      ++mes;
+    }
+    char texto[64];
+    snprintf(texto, sizeof(texto), "Fecha=%02u/%02u/%04u hora=%02u:%02u:%02u UTC ",
+             unsigned(dias + 1), mes, anio, unsigned((epoch / 3600) % 24),
+             unsigned((epoch / 60) % 60), unsigned(epoch % 60));
+    Serial.print(texto);
+  } else Serial.print("Fecha=--/--/---- hora=--:--:-- ");
   Serial.print("Posicion="); Serial.print(leerInt32(p + 5));
   Serial.print(" destino="); Serial.print(leerInt32(p + 9));
   Serial.print(" moviendo="); Serial.print(bool(p[2] & FLAG_MOVIENDO));
@@ -96,7 +119,10 @@ void enviar(uint8_t operacion, uint32_t argumento = 0) {
 }
 
 void ayuda() {
-  Serial.println("H = home | 1/2/3 = 150/350/550 pasos | M pasos = destino absoluto 0..2000");
+  Serial.println("h / ? = ayuda | HOME = buscar origen | 1/2/3 = 150/350/550 pasos | M pasos = destino absoluto 0..2000");
+  Serial.println("fDD/MM/AAAA = fecha (2000..2099) | hHH:MM:SS = hora 24 h UTC");
+  Serial.println("Inicializar: f09/11/2026 y luego h11:11:11; usar fecha/hora actuales. Esperar confirmacion entre ordenes.");
+  Serial.println("f conserva hora valida; si no existe inicia a las 00:00:00. h conserva fecha valida.");
   Serial.println("RTC = consultar | RTC unixUTC = ajustar hora (2000..2099) | SD = remontar y probar registro");
   Serial.println("S = parar | E = estado | ? = ayuda. Enviar con Nueva linea.");
 }
@@ -107,9 +133,19 @@ void comando(char *s) {
   while (n && isspace(static_cast<unsigned char>(s[n - 1]))) s[--n] = '\0';
   for (size_t i = 0; i < n; ++i) s[i] = toupper(static_cast<unsigned char>(s[i]));
   if (!n) return;
-  if (!strcmp(s, "H")) enviar(HOME);
-  else if (!strcmp(s, "S")) enviar(PARAR);
-  else if (!strcmp(s, "?")) ayuda();
+  if (!strcmp(s, "H") || !strcmp(s, "?")) ayuda();
+  else if (!strcmp(s, "HOME")) enviar(HOME);
+  else if (!strcmp(s, "S") || !strcmp(s, "STOP")) enviar(PARAR);
+  else if (s[0] == 'F') {
+    uint32_t fecha;
+    if (parsearFecha(s, fecha)) enviar(AJUSTAR_FECHA, fecha);
+    else Serial.println("Fecha invalida: usar fDD/MM/AAAA (2000..2099).");
+  }
+  else if (s[0] == 'H') {
+    uint32_t segundos;
+    if (parsearHora(s, segundos)) enviar(AJUSTAR_HORA, segundos);
+    else Serial.println("Hora invalida: usar hHH:MM:SS (00:00:00..23:59:59).");
+  }
   else if (!strcmp(s, "SD")) enviar(PROBAR_SD);
   else if (!strncmp(s, "RTC ", 4)) {
     char *inicio = s + 4;
@@ -177,7 +213,10 @@ void loop() {
         esperando = false;
         Serial.print("Orden procesada: "); Serial.println(nombreResultado(estado[3]));
       }
-      mostrarEstado(estado);
+      if (millis() - impresionMs >= 5000) {
+        impresionMs = millis();
+        mostrarEstado(estado);
+      }
     }
   }
   if (esperando && millis() - envioMs >= 2000) {

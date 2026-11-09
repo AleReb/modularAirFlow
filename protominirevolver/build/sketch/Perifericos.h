@@ -1,4 +1,4 @@
-#line 1 "/home/ale/Documents/repos/modularAirFlow/protominirevolver/Perifericos.h"
+#line 1 "C:\\Users\\Ale\\Downloads\\modularAirFlow\\protominirevolver\\Perifericos.h"
 #pragma once
 #include <SPI.h>
 #include <SD.h>

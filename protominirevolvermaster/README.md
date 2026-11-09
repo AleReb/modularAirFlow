@@ -24,7 +24,10 @@ Abrir el `.ino` de esta carpeta y seleccionar ESP32-S3. Mantener `Protocolo.h` j
 
 | Comando | Acción |
 | --- | --- |
-| `H` | Buscar HOME y establecer posición cero. |
+| `h` o `?` | Mostrar ayuda e instrucciones de fecha/hora. |
+| `HOME` | Buscar HOME y establecer posición cero. |
+| `f09/11/2026` | Fijar fecha DD/MM/AAAA. Conserva hora válida o inicia a las 00:00:00 si no era válida. |
+| `h11:11:11` | Fijar hora HH:MM:SS de 24 horas, conservando fecha válida. |
 | `1` | Ir a 150 pasos absolutos. |
 | `2` | Ir a 350 pasos absolutos. |
 | `3` | Ir a 550 pasos absolutos. |
@@ -39,12 +42,18 @@ Abrir el `.ino` de esta carpeta y seleccionar ESP32-S3. Mantener `Protocolo.h` j
 
 Enviar un comando por línea. Se aceptan minúsculas. Los números solos `1/2/3` son posiciones predefinidas; para un destino libre usar `M pasos`, evitando la ambigüedad del parser del sketch original.
 
-Para probar: cargar ambos sketches, enviar `E`, comprobar que `switch` cambie al accionar HOME, enviar `H` y esperar `origen=1`, `homing=0`, `moviendo=0`. Después enviar `1`, `2`, `3` o `M pasos` de uno en uno. Una posición sin homing se rechaza con `SIN_ORIGEN`.
+Para probar: cargar ambos sketches, enviar `E`, comprobar que `switch` cambie al accionar HOME, enviar `HOME` y esperar `origen=1`, `homing=0`, `moviendo=0`. Después enviar `1`, `2`, `3` o `M pasos` de uno en uno. Una posición sin homing se rechaza con `SIN_ORIGEN`.
 
-El maestro consulta el estado cada 250 ms y muestra posición, destino, movimiento, homing, origen, contacto HOME, resultado, RTC detectado, hora válida, Unix UTC, SD lista, error de SD y registros descartados. La confirmación indica que el slave procesó la orden; el movimiento puede seguir en curso. Las posiciones son conteos de pasos, sin encoder.
+El maestro consulta el estado cada 250 ms y muestra cada 5 segundos fecha DD/MM/AAAA, hora HH:MM:SS UTC, posición, destino, movimiento, homing, origen, contacto HOME, resultado, RTC detectado, hora válida, Unix UTC, SD lista, error de SD y registros descartados. `E` muestra el estado a pedido. La confirmación indica que el slave procesó la orden; el movimiento puede seguir en curso. Las posiciones son conteos de pasos, sin encoder.
 
 Se usa el protocolo binario **versión 2**, con órdenes de 10 bytes, estado de 22 bytes, CRC8 y secuencia. Cargar también el slave actualizado y conservar idénticos ambos `Protocolo.h`; no es compatible con la versión 1 de los otros sketches. Solo hay una orden pendiente; antes de mandar otra se espera confirmación, salvo `S`. El slave rechaza movimientos nuevos mientras está ocupado. Si falta confirmación durante 2 segundos, el maestro informa ejecución incierta y no reenvía automáticamente. Consultar `E` antes de repetir una orden; no existe eliminación de duplicados. Si se desconecta I2C, el slave continúa el movimiento ya aceptado.
 
-La integración actual de RTC y SD se revisó sin compilar, según lo solicitado, y no se probó en placas. La simulación anterior correspondía al protocolo versión 1 y no valida estas funciones nuevas. Las APIs utilizadas se contrastaron con [Wire de Arduino-ESP32 2.0.17](https://github.com/espressif/arduino-esp32/blob/2.0.17/libraries/Wire/src/Wire.h) y [ESP-FlexyStepper](https://github.com/pkerspe/ESP-FlexyStepper).
+Maestro y slave compilaron con Arduino-ESP32 2.0.17 para ESP32-S3. Se probaron con periféricos simulados la validación de fechas/horas, las órdenes USB/I2C del slave y la respuesta con posición y CRC. No se probó en placas. Las APIs utilizadas se contrastaron con [Wire de Arduino-ESP32 2.0.17](https://github.com/espressif/arduino-esp32/blob/2.0.17/libraries/Wire/src/Wire.h) y [ESP-FlexyStepper](https://github.com/pkerspe/ESP-FlexyStepper).
 
-El maestro continúa sin necesitar RTClib ni SD. Instalar RTClib de Adafruit solo para el slave, que maneja los periféricos. `RTC unixUTC` admite 946684800..4102444799 (2000..2099); el RTC se maneja en UTC y conserva su hora al reiniciar. Si informa `horaValida=0`, ajustar antes de registrar eventos que necesiten fecha. Los comandos de ajuste y prueba SD se rechazan mientras el motor está ocupado. Ver el [registro CSV y el protocolo ampliado](../protominirevolver/README.md#rtc-y-tarjeta-sd).
+El maestro continúa sin necesitar RTClib ni SD. Instalar RTClib de Adafruit solo para el slave, que maneja los periféricos. `RTC unixUTC` admite 946684800..4102444799 (2000..2099); el RTC se maneja en UTC y conserva su hora al reiniciar. Si informa `horaValida=0`, enviar primero `fDD/MM/AAAA` y luego `hHH:MM:SS`, esperando confirmacion entre ordenes. Las fechas y horas de ejemplo no son la hora actual. `h`/`H` ahora muestra ayuda; usar `HOME` para buscar origen. Los comandos de ajuste y prueba SD se rechazan mientras el motor está ocupado. Ver el [registro CSV y el protocolo ampliado](../protominirevolver/README.md#rtc-y-tarjeta-sd).
+
+## Operaciones I2C de fecha, hora y posicion
+
+Los comandos de texto se convierten a tramas binarias. AJUSTAR_FECHA=6 lleva un uint32 decimal AAAAMMDD (ejemplo: 20261109). AJUSTAR_HORA=7 lleva segundos desde medianoche (11:11:11 = 40271). Ambos usan el argumento de bytes 4..7 little endian y el CRC habitual. FECHA_NO_VALIDA=9 indica que falta inicializar fecha antes de ajustar hora.
+
+MOVER=1 envia el destino absoluto en pasos. La respuesta de 22 bytes incluye posicion actual int32 en bytes 5..8, destino en 9..12 y Unix UTC uint32 en 13..16. `E` consulta estos datos; no mueve el motor. Consultar `origen` para saber si la posicion esta referenciada. Cargar maestro y slave actualizados para usar fecha/hora por separado.

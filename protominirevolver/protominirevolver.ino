@@ -25,6 +25,7 @@ ESP_FlexyStepper motor;
 portMUX_TYPE buzonMux = portMUX_INITIALIZER_UNLOCKED;
 uint8_t buzon[TAM_ORDEN];
 bool pendiente = false;
+bool pogo = false; // Controlador I2C iniciado; no indica conexion fisica al maestro.
 uint8_t estadoPublicado[TAM_ESTADO] = {};
 bool tramaMala = false;
 bool referenciado = false;
@@ -136,6 +137,14 @@ void ejecutar(const uint8_t *p) {
       if (!ajustarReloj(epoch)) resultado = RTC_NO_DISPONIBLE;
       break;
     }
+    case AJUSTAR_FECHA:
+      if (!motor.motionComplete() || faseHome) { resultado = OCUPADO; break; }
+      resultado = ajustarFechaHumana(leerUint32(p + 4));
+      break;
+    case AJUSTAR_HORA:
+      if (!motor.motionComplete() || faseHome) { resultado = OCUPADO; break; }
+      resultado = ajustarHoraHumana(leerUint32(p + 4));
+      break;
     case PROBAR_SD:
       if (!motor.motionComplete() || faseHome) { resultado = OCUPADO; break; }
       if (!montarSD()) { resultado = ERROR_SD; break; }
@@ -146,6 +155,8 @@ void ejecutar(const uint8_t *p) {
     default: resultado = OPERACION_INVALIDA; break;
   }
 }
+
+#include "Consola.h"
 
 void setup() {
   // Deshabilitado al arrancar; se habilita al aceptar HOME o MOVER.
@@ -164,12 +175,24 @@ void setup() {
   Wire.onRequest(responder);
   if (!Wire.begin(uint8_t(DIRECCION_REVOLVER), SDA_PIN, SCL_PIN, uint32_t(100000))) {
     Serial.println("No se pudo iniciar I2C POGO; motor deshabilitado.");
-    while (true) delay(1000);
+    pogo = false;
+    //while (true) delay(1000);
+  }else{
+    pogo = true;
   }
   Serial.println("Prototipo slave 0x30: POGO SDA=6 SCL=7; STEP=3 DIR=4 ENA=2 HOME=1.");
+#if ARDUINO_USB_CDC_ON_BOOT
+  Serial.setTxTimeoutMs(0); // En loop, descartar diagnostico antes que esperar por USB.
+#endif
 }
 
 void loop() {
+  // Sin esperar al monitor serie ni llenar su buffer. Estados de la ultima consulta.
+  static uint32_t ultimoDiagnostico = 0;
+  if (millis() - ultimoDiagnostico >= 5000) {
+    ultimoDiagnostico = millis();
+    if (Serial) estadoConsola();
+  }
   uint8_t p[TAM_ORDEN];
   bool hayOrden;
   portENTER_CRITICAL(&buzonMux);
@@ -184,6 +207,9 @@ void loop() {
     registrarEvento("ORDEN", ultimaSecuencia, p[2], resultado,
                     motor.getCurrentPositionInSteps(), motor.getTargetPositionInSteps());
   }
+  // Una orden POGO por vuelta tiene prioridad sobre la entrada de consola.
+  if (!hayOrden) atenderConsola();
+  transmitirConsola();
   bool estabaMoviendo = !motor.motionComplete() || faseHome;
 
   if (faseHome == 1 && digitalRead(HOME_PIN) != HOME_ACTIVO) {
