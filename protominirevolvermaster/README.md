@@ -32,14 +32,19 @@ Abrir el `.ino` de esta carpeta y seleccionar ESP32-S3. Mantener `Protocolo.h` j
 | `M 0` | Volver al cero calculado, sin repetir homing. |
 | `S` | Parar la generación de pasos. |
 | `E` | Consultar el estado. |
+| `RTC` | Consultar hora Unix UTC y estado del RTC. |
+| `RTC 1794222000` | Ejemplo: ajustar a 2026-11-09 11:00:00 UTC. Reemplazar el timestamp por el deseado. |
+| `SD` | Remontar la SD y probar escritura del registro. |
 | `?` | Mostrar ayuda. |
 
 Enviar un comando por línea. Se aceptan minúsculas. Los números solos `1/2/3` son posiciones predefinidas; para un destino libre usar `M pasos`, evitando la ambigüedad del parser del sketch original.
 
 Para probar: cargar ambos sketches, enviar `E`, comprobar que `switch` cambie al accionar HOME, enviar `H` y esperar `origen=1`, `homing=0`, `moviendo=0`. Después enviar `1`, `2`, `3` o `M pasos` de uno en uno. Una posición sin homing se rechaza con `SIN_ORIGEN`.
 
-El maestro consulta el estado cada 250 ms y muestra posición, destino, movimiento, homing, origen, contacto HOME y resultado. La confirmación indica que el slave procesó la orden; el movimiento puede seguir en curso. Las posiciones son conteos de pasos, sin encoder.
+El maestro consulta el estado cada 250 ms y muestra posición, destino, movimiento, homing, origen, contacto HOME, resultado, RTC detectado, hora válida, Unix UTC, SD lista, error de SD y registros descartados. La confirmación indica que el slave procesó la orden; el movimiento puede seguir en curso. Las posiciones son conteos de pasos, sin encoder.
 
-Se conserva el protocolo binario versión 1 de `minirevolveri2c`, con CRC8 y secuencia. Solo hay una orden pendiente; antes de mandar otra se espera confirmación, salvo `S`. El slave rechaza movimientos nuevos mientras está ocupado. Si falta confirmación durante 2 segundos, el maestro informa ejecución incierta y no reenvía automáticamente. Consultar `E` antes de repetir una orden; no existe eliminación de duplicados. Si se desconecta I2C, el slave continúa el movimiento ya aceptado.
+Se usa el protocolo binario **versión 2**, con órdenes de 10 bytes, estado de 22 bytes, CRC8 y secuencia. Cargar también el slave actualizado y conservar idénticos ambos `Protocolo.h`; no es compatible con la versión 1 de los otros sketches. Solo hay una orden pendiente; antes de mandar otra se espera confirmación, salvo `S`. El slave rechaza movimientos nuevos mientras está ocupado. Si falta confirmación durante 2 segundos, el maestro informa ejecución incierta y no reenvía automáticamente. Consultar `E` antes de repetir una orden; no existe eliminación de duplicados. Si se desconecta I2C, el slave continúa el movimiento ya aceptado.
 
-No se ha compilado con el toolchain Arduino/ESP32 ni probado en placas en este entorno. La validación local con simuladores comprueba lógica de comandos y protocolo, pero no el funcionamiento físico de I2C, el driver o el motor. Las APIs utilizadas se contrastaron con [Wire de Arduino-ESP32 2.0.17](https://github.com/espressif/arduino-esp32/blob/2.0.17/libraries/Wire/src/Wire.h) y [ESP-FlexyStepper](https://github.com/pkerspe/ESP-FlexyStepper).
+La integración actual de RTC y SD se revisó sin compilar, según lo solicitado, y no se probó en placas. La simulación anterior correspondía al protocolo versión 1 y no valida estas funciones nuevas. Las APIs utilizadas se contrastaron con [Wire de Arduino-ESP32 2.0.17](https://github.com/espressif/arduino-esp32/blob/2.0.17/libraries/Wire/src/Wire.h) y [ESP-FlexyStepper](https://github.com/pkerspe/ESP-FlexyStepper).
+
+El maestro continúa sin necesitar RTClib ni SD. Instalar RTClib de Adafruit solo para el slave, que maneja los periféricos. `RTC unixUTC` admite 946684800..4102444799 (2000..2099); el RTC se maneja en UTC y conserva su hora al reiniciar. Si informa `horaValida=0`, ajustar antes de registrar eventos que necesiten fecha. Los comandos de ajuste y prueba SD se rechazan mientras el motor está ocupado. Ver el [registro CSV y el protocolo ampliado](../protominirevolver/README.md#rtc-y-tarjeta-sd).

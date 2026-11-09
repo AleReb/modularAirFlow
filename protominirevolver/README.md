@@ -19,7 +19,7 @@ Los números GPIO son los del microcontrolador. Los números de pin de los conec
 
 **HOME se asigna al conector de servicio JP2**: conectar un contacto normalmente abierto entre **JP2.3 (GPIO1)** y **JP2.2 (GND)**. Se configura `INPUT_PULLUP`, activo LOW. JP2.1 es 3,3 V y no se necesita para un contacto seco. BTNA/GPIO5 queda sin usar por este sketch.
 
-Seleccionar ESP32-S3 en Arduino e instalar `ESP_FlexyStepper`. Para ver mensajes por USB nativo, activar **USB CDC On Boot**. Abrir el `.ino` de esta carpeta; `Protocolo.h` debe permanecer junto a él. El maestro no necesita la biblioteca del motor.
+Seleccionar ESP32-S3 en Arduino e instalar `ESP_FlexyStepper` y **RTClib de Adafruit** (con su dependencia Adafruit BusIO). `SPI` y `SD` vienen con el core ESP32. Para ver mensajes por USB nativo, activar **USB CDC On Boot**. Abrir el `.ino` de esta carpeta; `Protocolo.h` y `Perifericos.h` deben permanecer junto a él. El maestro no necesita la biblioteca del motor.
 
 El firmware asume **ENA activo LOW**. Si el driver conectado habilita con HIGH, cambiar `ENA_ACTIVO` antes de probar. Arranca sin movimiento y con ENA deshabilitado; al aceptar HOME o un movimiento lo habilita y lo mantiene habilitado para conservar par al terminar. STOP detiene los pulsos y mantiene ENA; no desconecta potencia.
 
@@ -27,9 +27,48 @@ Primero ejecutar `H` desde el maestro. Si HOME ya está activo, se retira hasta 
 
 Una vez referenciado, `1`, `2`, `3` seleccionan 150, 350 y 550 pasos absolutos, como en el ejemplo original. `M pasos` permite destinos absolutos de 0 a 2000. Velocidad: 150 pasos/s; aceleración: 500 pasos/s²; desaceleración: 250 pasos/s². Los límites son provisionales y deben ajustarse a la mecánica. La posición se calcula con los pasos enviados; no hay encoder.
 
-El movimiento se procesa en `loop()`, sin servicio de motor en segundo plano. Los callbacks I2C solo copian tramas. Se mantiene el protocolo versión 1 de `minirevolveri2c`: orden de 10 bytes, estado de 14 bytes, CRC8 y secuencia. Una respuesta de aceptación no significa que el movimiento terminó: observar `moviendo=0` y `homing=0`. Durante un movimiento se rechazan nuevas órdenes de HOME/MOVER con `OCUPADO`; STOP puede reemplazar una orden pendiente. Si STOP interrumpe homing se pierde el origen. Una pérdida de I2C no cancela un movimiento ya aceptado.
+El movimiento se procesa en `loop()`, sin servicio de motor en segundo plano. Los callbacks I2C solo copian tramas. Se usa una extensión del protocolo de `minirevolveri2c`, **versión 2**: orden de 10 bytes, estado de 22 bytes, CRC8 y secuencia. Actualizar también el maestro: el protocolo versión 1 de los otros ejemplos no es compatible con este estado ampliado. Una respuesta de aceptación no significa que el movimiento terminó: observar `moviendo=0` y `homing=0`. Durante un movimiento se rechazan nuevas órdenes de HOME/MOVER con `OCUPADO`; STOP puede reemplazar una orden pendiente. Si STOP interrumpe homing se pierde el origen. Una pérdida de I2C no cancela un movimiento ya aceptado.
 
-El RTC, SD, X1/X2 y BTNA no se inicializan en este prototipo. El bus POGO funciona a 100 kHz con señales de 3,3 V.
+El bus POGO funciona a 100 kHz con señales de 3,3 V. BTNA queda sin usar. X1/X2 comparten el bus interno del RTC; no se consultan otros dispositivos ni la memoria AT24C32 del módulo.
+
+## RTC y tarjeta SD
+
+[Perifericos.h](Perifericos.h) integra el **DS3231** en `TwoWire(1)` como maestro local, con **SDA=8, SCL=9**, dirección `0x68`. `Wire` sigue usando el controlador 0 como slave del POGO en GPIO6/7. Los dos buses son independientes.
+
+La **SD usa SPI** con **CS=10, MOSI=11, CLK=12 y MISO=13**, inicialmente a 4 MHz. Se monta al arrancar sin formatearla. Usar una tarjeta preparada en FAT32. Si falta RTC o SD, el control del motor sigue disponible y su estado se informa al maestro.
+
+Desde el maestro:
+
+- `E` o `RTC`: muestra detección del RTC, validez de hora, segundos Unix UTC, estado de SD y cantidad de registros descartados.
+- `RTC 1794222000`: ejemplo de ajuste a 2026-11-09 11:00:00 UTC. Reemplazar por el timestamp UTC deseado; rango admitido 2000..2099. El RTC no aplica huso horario ni horario de verano.
+- `SD`: vuelve a montar la SD y prueba una escritura en el archivo de registro. No borra ni formatea.
+
+El RTC se conserva al reiniciar y **no se ajusta automáticamente con la fecha de compilación**. Si perdió alimentación del oscilador o tiene una fecha inválida, `horaValida=0` y los registros llevan Unix=0 hasta ajustarlo. El timestamp se guarda al encolar cada evento; no se corrigen registros anteriores al ajuste.
+
+El archivo **`/revolver.csv`** se abre para añadir filas, conservando los datos existentes. Registra arranque, órdenes (incluidos rechazos), final de movimiento/homing y pruebas de SD. Columnas: `unix_utc,millis,evento,secuencia,operacion,resultado,posicion,destino,perdidos`. Un evento FIN conserva la secuencia y operación del movimiento original, aunque se hayan rechazado órdenes posteriores. Una parada se registra como ORDEN/PARAR. Los códigos de operación/resultado están en `Protocolo.h`.
+
+Para no introducir pausas entre pasos, no se accede al RTC ni a la SD mientras hay movimiento/homing: se extrapola la hora desde la última lectura y se guardan hasta **32 eventos en RAM**. Al detenerse se refresca el RTC cada segundo y se escribe una fila por vuelta. Si la cola se llena, se descartan eventos nuevos y aumenta `logsPerdidos`. Si falla la SD, la cola se conserva y se puede reintentar con `SD`. El comando SD intenta escribir la primera fila pendiente, que puede ser un evento anterior a la prueba. Los eventos pendientes se pierden al reiniciar; esto no es un registro continuo de cada paso.
+
+Los comandos de ajustar RTC y probar SD devuelven `OCUPADO` durante movimiento. La E/S de SD con motor detenido puede retrasar el procesamiento de la siguiente orden; no se realiza desde callbacks I2C. El RTC se consulta al arrancar y en reposo, por lo que su detección durante movimiento representa la última lectura.
+
+### Estado I2C versión 2
+
+| Bytes | Contenido |
+| --- | --- |
+| 0 | Cabecera `0x5A` |
+| 1 | Versión `2` |
+| 2 | Flags: moviendo=1, homing=2, referenciado=4, HOME activo=8, RTC detectado=16, hora válida=32, SD lista=64, error SD=128 |
+| 3 | Resultado de la última orden / homing |
+| 4 | Secuencia de la última orden procesada |
+| 5..8 | Posición int32, little endian |
+| 9..12 | Destino int32, little endian |
+| 13..16 | Tiempo Unix UTC uint32, little endian; 0 si no hay hora válida |
+| 17..20 | Eventos descartados uint32, little endian |
+| 21 | CRC8 de los bytes 0..20 |
+
+Las órdenes conservan 10 bytes: cabecera `0xA5`, versión, operación, secuencia, argumento de 4 bytes little endian, reservado=0 y CRC8 de los primeros 9 bytes. Operaciones: MOVER=1, HOME=2, PARAR=3, AJUSTAR_RTC=4 (argumento Unix uint32), PROBAR_SD=5. Resultados añadidos: RTC_NO_DISPONIBLE=7 y ERROR_SD=8. El argumento de MOVER conserva interpretación int32 y rango 0..2000.
+
+Las APIs se contrastaron con [RTClib DS3231 de Adafruit](https://github.com/adafruit/RTClib/blob/master/src/RTC_DS3231.cpp) y [SD de Arduino-ESP32](https://github.com/espressif/arduino-esp32/blob/2.0.17/libraries/SD/src/SD.h).
 
 ## GPIO utilizados
 
@@ -153,4 +192,4 @@ Este README describe el PCB existente. Los sketches actuales tienen otras asigna
 - [minirevolveri2c](../minirevolveri2c/README.md), para S3, usa STEP=5, DIR=6, HOME=7 y SDA/SCL=10/11. No controla ENA. En este PCB, STEP/DIR/ENA son 3/4/2, GPIO6/7 van al POGO y GPIO10/11 a la SD.
 - [centralI2C](../centralI2C/README.md) comparte SDA/SCL=8/9 con X1/X2, pero propone el segundo bus en 10/11 y control de ventilador en 4/5/6/7; esas funciones difieren del PCB.
 
-El nuevo sketch de esta carpeta adapta los pines al PCB: GPIO1 es HOME y el POGO es slave. BTNA sigue reservado. La polaridad ENA debe ajustarse al driver real. No se ha compilado con el toolchain ESP32 ni cargado en hardware en este entorno; la comprobación local con simuladores no verifica temporización, niveles eléctricos ni movimiento físico.
+El nuevo sketch de esta carpeta adapta los pines al PCB: GPIO1 es HOME y el POGO es slave. BTNA sigue reservado. La polaridad ENA debe ajustarse al driver real. Esta integración de RTC y SD se revisó sin compilar, según lo solicitado. No se probó en hardware.

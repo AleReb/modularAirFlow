@@ -30,6 +30,8 @@ const char *nombreResultado(uint8_t valor) {
     case HOME_NO_ENCONTRADO: return "HOME_NO_ENCONTRADO";
     case OPERACION_INVALIDA: return "OPERACION_INVALIDA";
     case TRAMA_INVALIDA: return "TRAMA_INVALIDA";
+    case RTC_NO_DISPONIBLE: return "RTC_NO_DISPONIBLE";
+    case ERROR_SD: return "ERROR_SD";
     default: return "DESCONOCIDO";
   }
 }
@@ -40,7 +42,7 @@ bool consultar(uint8_t *p) {
     return false;
   }
   for (size_t i = 0; i < TAM_ESTADO; ++i) p[i] = Wire.read();
-  return p[0] == 0x5A && p[1] == VERSION_PROTOCOLO && crc8(p, 13) == p[13];
+  return p[0] == 0x5A && p[1] == VERSION_PROTOCOLO && crc8(p, TAM_ESTADO - 1) == p[TAM_ESTADO - 1];
 }
 
 void mostrarEstado(const uint8_t *p) {
@@ -50,10 +52,16 @@ void mostrarEstado(const uint8_t *p) {
   Serial.print(" homing="); Serial.print(bool(p[2] & FLAG_HOME));
   Serial.print(" origen="); Serial.print(bool(p[2] & FLAG_REFERENCIADO));
   Serial.print(" switch="); Serial.print(bool(p[2] & FLAG_SWITCH));
+  Serial.print(" RTC="); Serial.print(bool(p[2] & FLAG_RTC));
+  Serial.print(" horaValida="); Serial.print(bool(p[2] & FLAG_HORA_VALIDA));
+  Serial.print(" unixUTC="); Serial.print(leerUint32(p + 13));
+  Serial.print(" SD="); Serial.print(bool(p[2] & FLAG_SD));
+  Serial.print(" errorSD="); Serial.print(bool(p[2] & FLAG_ERROR_SD));
+  Serial.print(" logsPerdidos="); Serial.print(leerUint32(p + 17));
   Serial.print(" resultado="); Serial.println(nombreResultado(p[3]));
 }
 
-void enviar(uint8_t operacion, int32_t destino = 0) {
+void enviar(uint8_t operacion, uint32_t argumento = 0) {
   if (esperando && operacion != PARAR) {
     Serial.println("Esperando confirmacion. S sigue disponible.");
     return;
@@ -71,7 +79,7 @@ void enviar(uint8_t operacion, int32_t destino = 0) {
   }
   uint8_t p[TAM_ORDEN] = {0xA5, VERSION_PROTOCOLO, operacion};
   p[3] = ++secuencia;
-  ponerInt32(p + 4, destino);
+  ponerUint32(p + 4, argumento);
   p[9] = crc8(p, 9);
   Wire.beginTransmission(DIRECCION_REVOLVER);
   Wire.write(p, TAM_ORDEN);
@@ -89,6 +97,7 @@ void enviar(uint8_t operacion, int32_t destino = 0) {
 
 void ayuda() {
   Serial.println("H = home | 1/2/3 = 150/350/550 pasos | M pasos = destino absoluto 0..2000");
+  Serial.println("RTC = consultar | RTC unixUTC = ajustar hora (2000..2099) | SD = remontar y probar registro");
   Serial.println("S = parar | E = estado | ? = ayuda. Enviar con Nueva linea.");
 }
 
@@ -101,7 +110,19 @@ void comando(char *s) {
   if (!strcmp(s, "H")) enviar(HOME);
   else if (!strcmp(s, "S")) enviar(PARAR);
   else if (!strcmp(s, "?")) ayuda();
-  else if (!strcmp(s, "E")) {
+  else if (!strcmp(s, "SD")) enviar(PROBAR_SD);
+  else if (!strncmp(s, "RTC ", 4)) {
+    char *inicio = s + 4;
+    while (isspace(static_cast<unsigned char>(*inicio))) ++inicio;
+    char *fin;
+    errno = 0;
+    unsigned long epoch = strtoul(inicio, &fin, 10);
+    if (*inicio >= '0' && *inicio <= '9' && fin != inicio && *fin == '\0' &&
+        errno != ERANGE && epoch >= UNIX_MIN && epoch <= UNIX_MAX)
+      enviar(AJUSTAR_RTC, uint32_t(epoch));
+    else Serial.println("Usar RTC unixUTC, entre 946684800 y 4102444799.");
+  }
+  else if (!strcmp(s, "E") || !strcmp(s, "RTC")) {
     uint8_t estado[TAM_ESTADO];
     if (consultar(estado)) mostrarEstado(estado);
     else Serial.println("Slave 0x30 sin respuesta valida.");
@@ -113,7 +134,7 @@ void comando(char *s) {
     errno = 0;
     long pasos = strtol(s + 2, &fin, 10);
     if (fin != s + 2 && *fin == '\0' && errno != ERANGE && pasos >= 0 && pasos <= 2000)
-      enviar(MOVER, int32_t(pasos));
+      enviar(MOVER, uint32_t(pasos));
     else Serial.println("Usar M pasos, entre 0 y 2000.");
   } else Serial.println("Comando invalido. Escribe ?.");
 }

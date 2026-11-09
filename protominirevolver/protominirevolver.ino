@@ -4,6 +4,7 @@
 #include <ESP_FlexyStepper.h>
 #include <string.h>
 #include "Protocolo.h"
+#include "Perifericos.h"
 
 #if !defined(CONFIG_IDF_TARGET_ESP32S3)
 #error "Selecciona ESP32-S3: este sketch usa los pines del PCB revolver."
@@ -28,7 +29,8 @@ uint8_t estadoPublicado[TAM_ESTADO] = {};
 bool tramaMala = false;
 bool referenciado = false;
 uint8_t faseHome = 0; // 0=inactivo, 1=liberar switch, 2=buscar switch.
-uint8_t resultado = OK, ultimaSecuencia = 0;
+uint8_t resultado = RESULTADO_OK, ultimaSecuencia = 0;
+uint8_t secuenciaMovimiento = 0, operacionMovimiento = 0;
 uint32_t ultimoEstado = 0;
 
 void publicarEstado() {
@@ -41,7 +43,13 @@ void publicarEstado() {
   p[4] = ultimaSecuencia;
   ponerInt32(p + 5, motor.getCurrentPositionInSteps());
   ponerInt32(p + 9, motor.getTargetPositionInSteps());
-  p[13] = crc8(p, 13);
+  if (rtcListo) p[2] |= FLAG_RTC;
+  if (horaValida) p[2] |= FLAG_HORA_VALIDA;
+  if (sdLista) p[2] |= FLAG_SD;
+  if (errorSD) p[2] |= FLAG_ERROR_SD;
+  ponerUint32(p + 13, horaUnix());
+  ponerUint32(p + 17, eventosPerdidos);
+  p[TAM_ESTADO - 1] = crc8(p, TAM_ESTADO - 1);
   portENTER_CRITICAL(&buzonMux);
   memcpy(estadoPublicado, p, TAM_ESTADO);
   portEXIT_CRITICAL(&buzonMux);
@@ -89,7 +97,7 @@ void habilitarMotor() {
 
 void ejecutar(const uint8_t *p) {
   ultimaSecuencia = p[3];
-  resultado = OK;
+  resultado = RESULTADO_OK;
   int32_t destino = leerInt32(p + 4);
   switch (p[2]) {
     case PARAR:
@@ -100,6 +108,8 @@ void ejecutar(const uint8_t *p) {
     case HOME:
       if (!motor.motionComplete() || faseHome) { resultado = OCUPADO; break; }
       habilitarMotor();
+      secuenciaMovimiento = ultimaSecuencia;
+      operacionMovimiento = HOME;
       referenciado = false;
       motor.setSpeedInStepsPerSecond(150);
       if (digitalRead(HOME_PIN) == HOME_ACTIVO) {
@@ -115,7 +125,23 @@ void ejecutar(const uint8_t *p) {
       if (!referenciado) { resultado = SIN_ORIGEN; break; }
       if (destino < 0 || destino > MAX_POSICION) { resultado = FUERA_RANGO; break; }
       habilitarMotor();
+      secuenciaMovimiento = ultimaSecuencia;
+      operacionMovimiento = MOVER;
       motor.setTargetPositionInSteps(destino);
+      break;
+    case AJUSTAR_RTC: {
+      if (!motor.motionComplete() || faseHome) { resultado = OCUPADO; break; }
+      uint32_t epoch = leerUint32(p + 4);
+      if (epoch < UNIX_MIN || epoch > UNIX_MAX) { resultado = FUERA_RANGO; break; }
+      if (!ajustarReloj(epoch)) resultado = RTC_NO_DISPONIBLE;
+      break;
+    }
+    case PROBAR_SD:
+      if (!motor.motionComplete() || faseHome) { resultado = OCUPADO; break; }
+      if (!montarSD()) { resultado = ERROR_SD; break; }
+      registrarEvento("SD_PRUEBA", ultimaSecuencia, PROBAR_SD, RESULTADO_OK,
+                      motor.getCurrentPositionInSteps(), motor.getTargetPositionInSteps());
+      if (!guardarEvento()) resultado = ERROR_SD;
       break;
     default: resultado = OPERACION_INVALIDA; break;
   }
@@ -131,6 +157,8 @@ void setup() {
   motor.setSpeedInStepsPerSecond(150);
   motor.setAccelerationInStepsPerSecondPerSecond(500);
   motor.setDecelerationInStepsPerSecondPerSecond(250);
+  iniciarPerifericos();
+  registrarEvento("ARRANQUE", 0, 0, RESULTADO_OK, 0, 0);
   publicarEstado();
   Wire.onReceive(recibir);
   Wire.onRequest(responder);
@@ -151,7 +179,12 @@ void loop() {
   tramaMala = false;
   portEXIT_CRITICAL(&buzonMux);
   if (mala) resultado = TRAMA_INVALIDA;
-  if (hayOrden) ejecutar(p);
+  if (hayOrden) {
+    ejecutar(p);
+    registrarEvento("ORDEN", ultimaSecuencia, p[2], resultado,
+                    motor.getCurrentPositionInSteps(), motor.getTargetPositionInSteps());
+  }
+  bool estabaMoviendo = !motor.motionComplete() || faseHome;
 
   if (faseHome == 1 && digitalRead(HOME_PIN) != HOME_ACTIVO) {
     pararAhora();
@@ -167,6 +200,19 @@ void loop() {
     faseHome = 0;
     resultado = HOME_NO_ENCONTRADO;
     referenciado = false;
+  }
+  bool detenido = motor.motionComplete() && !faseHome;
+  if (estabaMoviendo && detenido) {
+    uint8_t resultadoMovimiento = operacionMovimiento == HOME && !referenciado
+                                   ? HOME_NO_ENCONTRADO : RESULTADO_OK;
+    registrarEvento("FIN", secuenciaMovimiento, operacionMovimiento, resultadoMovimiento,
+                    motor.getCurrentPositionInSteps(), motor.getTargetPositionInSteps());
+  }
+  // Ningun acceso a SD/RTC durante el movimiento ni desde callbacks I2C.
+  // La hora publicada mientras gira se extrapola desde la ultima lectura del RTC.
+  if (detenido) {
+    if (millis() - consultaRtcMs >= 1000) leerReloj();
+    guardarEvento(); // Una fila por vuelta; conservar cola si la SD falla.
   }
   if (hayOrden || millis() - ultimoEstado >= 10) {
     ultimoEstado = millis();
