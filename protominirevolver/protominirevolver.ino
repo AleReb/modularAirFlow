@@ -1,6 +1,6 @@
 // Modulo I2C: recibe ordenes y genera los pasos localmente.
 #include <Arduino.h>
-#include <esp32-hal-rgb-led.h>
+#include <Adafruit_NeoPixel.h>
 #include <Wire.h>
 #include <ESP_FlexyStepper.h>
 #include <string.h>
@@ -16,6 +16,7 @@ constexpr int STEP_PIN = 3, DIR_PIN = 4, HOME_PIN = 1;
 constexpr int ENA_PIN = 2;
 constexpr int LED_RGB_PIN = 48;
 constexpr uint8_t BRILLO_HOME = 16;
+Adafruit_NeoPixel ledRgb(1, LED_RGB_PIN, NEO_GRB + NEO_KHZ800);
 constexpr int SDA_PIN = 6, SCL_PIN = 7;
 // Ajustar si el driver conectado habilita con nivel HIGH.
 constexpr int ENA_ACTIVO = LOW;
@@ -36,15 +37,40 @@ uint8_t faseHome = 0; // 0=inactivo, 1=liberar switch, 2=buscar switch.
 uint8_t resultado = RESULTADO_OK, ultimaSecuencia = 0;
 uint8_t secuenciaMovimiento = 0, operacionMovimiento = 0;
 uint32_t ultimoEstado = 0;
+bool actividadLedPendiente = false; // Protegido por buzonMux; callbacks solo marcan.
+constexpr uint32_t DESTELLO_MS = 100, REPOSO_LED_MS = 100;
+
+void indicarMensajeRecibido() {
+  portENTER_CRITICAL(&buzonMux);
+  actividadLedPendiente = true;
+  portEXIT_CRITICAL(&buzonMux);
+}
 
 void actualizarLedHome() {
-  static int ultimoHome = -1;
-  int activo = digitalRead(HOME_PIN) == HOME_ACTIVO;
-  if (activo == ultimoHome) return;
-  // RGB direccionable: actualizar solo al cambiar el contacto.
-  neopixelWrite(LED_RGB_PIN, activo ? 0 : BRILLO_HOME,
-                activo ? BRILLO_HOME : 0, 0);
-  ultimoHome = activo;
+  static int ultimoColor = -1;
+  static bool amarillo = false, reposo = false;
+  static uint32_t cambioMs = 0;
+  uint32_t ahora = millis();
+  if (amarillo && uint32_t(ahora - cambioMs) >= DESTELLO_MS) {
+    amarillo = false;
+    reposo = true;
+    cambioMs = ahora;
+  }
+  if (reposo && uint32_t(ahora - cambioMs) >= REPOSO_LED_MS) reposo = false;
+  if (!amarillo && !reposo) {
+    portENTER_CRITICAL(&buzonMux);
+    bool mensaje = actividadLedPendiente;
+    actividadLedPendiente = false;
+    portEXIT_CRITICAL(&buzonMux);
+    if (mensaje) { amarillo = true; cambioMs = ahora; }
+  }
+  // Recalcular el color base al terminar el destello, no restaurar uno antiguo.
+  int color = amarillo ? 2 : (referenciado ? 1 : 0);
+  if (color == ultimoColor) return;
+  ledRgb.setPixelColor(0, color == 1 ? 0 : BRILLO_HOME,
+                      color == 0 ? 0 : BRILLO_HOME, 0);
+  ledRgb.show();
+  ultimoColor = color;
 }
 
 void publicarEstado() {
@@ -82,6 +108,7 @@ void recibir(int cantidad) {
   if (valida) valida = p[0] == 0xA5 && p[1] == VERSION_PROTOCOLO &&
                       p[8] == 0 && crc8(p, 9) == p[9];
   portENTER_CRITICAL(&buzonMux);
+  actividadLedPendiente = true; // Incluye tramas invalidas o buzon ocupado.
   if (!valida) tramaMala = true;
   else if (!pendiente || p[2] == PARAR) {
     memcpy(buzon, p, TAM_ORDEN);
@@ -177,6 +204,7 @@ void setup() {
   pinMode(ENA_PIN, OUTPUT);
   Serial.begin(115200);
   pinMode(HOME_PIN, INPUT_PULLUP);
+  ledRgb.begin();
   actualizarLedHome();
   motor.connectToPins(STEP_PIN, DIR_PIN);
   motor.setSpeedInStepsPerSecond(150);
@@ -198,7 +226,7 @@ void setup() {
 #if ARDUINO_USB_CDC_ON_BOOT
   Serial.setTxTimeoutMs(0); // En loop, descartar diagnostico antes que esperar por USB.
 #endif
-  decirConsola("[arranque] HOME: 1=activo, 0=inactivo; RGB GPIO48: verde=activo, rojo=inactivo.");
+  decirConsola("[arranque] HOME: 1=contacto activo; RGB GPIO48: verde=con origen, rojo=sin origen, amarillo=recepcion.");
   estadoConsola();
 }
 
@@ -238,12 +266,12 @@ void loop() {
     faseHome = 0;
   }
   motor.processMovement(); // Movimiento no bloqueante: I2C sigue disponible.
-  actualizarLedHome();
   if (faseHome && motor.motionComplete()) {
     faseHome = 0;
     resultado = HOME_NO_ENCONTRADO;
     referenciado = false;
   }
+  actualizarLedHome();
   bool detenido = motor.motionComplete() && !faseHome;
   if (estabaMoviendo && detenido) {
     uint8_t resultadoMovimiento = operacionMovimiento == HOME && !referenciado

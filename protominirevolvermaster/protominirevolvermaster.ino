@@ -1,6 +1,8 @@
-// Maestro de prueba ESP32-S3: solo USB serial e I2C hacia el minirevolver.
+// Maestro de prueba ESP32-S3: solo USB serial e I2C hacia el minirevolver. pruebas exitosas
+
 #include <Arduino.h>
 #include <Wire.h>
+#include <Adafruit_NeoPixel.h>
 #include <ctype.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -13,6 +15,29 @@
 
 // Si se usa otro PCB revolver como maestro, corresponden a su POGO.
 constexpr int SDA_PIN = 6, SCL_PIN = 7;
+constexpr uint8_t NEOPIXEL_PIN = 48, BRILLO_LED = 32;
+Adafruit_NeoPixel ledEstado(1, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
+constexpr uint32_t AMARILLO_MIN_MS = 100;
+bool comunicacionValida = false, amarilloActivo = false;
+uint32_t amarilloMs = 0;
+
+void actualizarLed() {
+  if (amarilloActivo && millis() - amarilloMs >= AMARILLO_MIN_MS) amarilloActivo = false;
+  uint8_t color = amarilloActivo ? 2 : (comunicacionValida ? 1 : 0);
+  static uint8_t anterior = 255;
+  if (color == anterior) return;
+  ledEstado.setPixelColor(0, color == 1 ? 0 : BRILLO_LED,
+                         color == 0 ? 0 : BRILLO_LED, 0);
+  ledEstado.show();
+  anterior = color;
+}
+
+void registrarComunicacion(bool valida) {
+  comunicacionValida = valida;
+  if (!valida) amarilloActivo = false; // El fallo tiene prioridad sobre el pulso amarillo.
+  actualizarLed();
+}
+
 uint8_t secuencia = 0, secuenciaPendiente = 0;
 bool esperando = false;
 bool secuenciaInicializada = false;
@@ -40,10 +65,13 @@ const char *nombreResultado(uint8_t valor) {
 bool consultar(uint8_t *p) {
   if (Wire.requestFrom(uint8_t(DIRECCION_REVOLVER), size_t(TAM_ESTADO), true) != TAM_ESTADO) {
     while (Wire.available()) Wire.read();
+    registrarComunicacion(false);
     return false;
   }
   for (size_t i = 0; i < TAM_ESTADO; ++i) p[i] = Wire.read();
-  return p[0] == 0x5A && p[1] == VERSION_PROTOCOLO && crc8(p, TAM_ESTADO - 1) == p[TAM_ESTADO - 1];
+  bool valida = p[0] == 0x5A && p[1] == VERSION_PROTOCOLO && crc8(p, TAM_ESTADO - 1) == p[TAM_ESTADO - 1];
+  registrarComunicacion(valida);
+  return valida;
 }
 
 void mostrarEstado(const uint8_t *p) {
@@ -104,10 +132,14 @@ void enviar(uint8_t operacion, uint32_t argumento = 0) {
   p[3] = ++secuencia;
   ponerUint32(p + 4, argumento);
   p[9] = crc8(p, 9);
+  amarilloActivo = true;
+  amarilloMs = millis();
+  actualizarLed();
   Wire.beginTransmission(DIRECCION_REVOLVER);
   Wire.write(p, TAM_ORDEN);
   uint8_t error = Wire.endTransmission();
   if (error) {
+    registrarComunicacion(false);
     Serial.print("Error I2C: "); Serial.println(error);
     Serial.println("Ejecucion incierta; consultar E antes de repetir.");
     return;
@@ -192,6 +224,8 @@ void atenderSerial() {
 }
 
 void setup() {
+  ledEstado.begin();
+  actualizarLed(); // Rojo hasta recibir la primera respuesta valida.
   Serial.begin(115200);
   if (!Wire.begin(SDA_PIN, SCL_PIN, uint32_t(100000))) {
     Serial.println("No se pudo iniciar I2C master.");
@@ -221,7 +255,9 @@ void loop() {
   }
   if (esperando && millis() - envioMs >= 2000) {
     esperando = false;
+    registrarComunicacion(false);
     Serial.println("Sin confirmacion: ejecucion incierta. Consultar E; no se reenvia.");
   }
+  actualizarLed();
   delay(1);
 }

@@ -1,6 +1,6 @@
 # Maestro I2C sencillo para probar el minirevolver
 
-[protominirevolvermaster.ino](protominirevolvermaster.ino) se carga en **otro ESP32-S3**. Recibe comandos por monitor serie y los envía al [prototipo slave](../protominirevolver/README.md), dirección `0x30`. Solo usa `Arduino.h`, `Wire` y el `Protocolo.h` incluido; no controla un motor local ni utiliza sensores.
+[protominirevolvermaster.ino](protominirevolvermaster.ino) se carga en **otro ESP32-S3**. Recibe comandos por monitor serie y los envía al [prototipo slave](../protominirevolver/README.md), dirección `0x30`. Usa `Arduino.h`, `Wire`, `Adafruit_NeoPixel` y el `Protocolo.h` incluido; no controla un motor local ni utiliza sensores.
 
 ## Cableado
 
@@ -19,6 +19,18 @@ Usar pull-ups de SDA y SCL a **3,3 V**: como punto de partida para cables cortos
 HOME del slave: contacto normalmente abierto entre **JP2.3 (GPIO1)** y **JP2.2 (GND)**. Revisar también `ENA_ACTIVO` del slave según el driver.
 
 ## Carga y comandos
+
+### Indicador NeoPixel RGB (GPIO48)
+
+El maestro controla un NeoPixel RGB en **GPIO48** con la librería **Adafruit NeoPixel**, configurado como `NEO_GRB + NEO_KHZ800`. Instalar **Adafruit NeoPixel** desde el gestor de bibliotecas del IDE Arduino. Brillo configurado: 32/255 por canal.
+
+| Color | Significado |
+| --- | --- |
+| Verde | Última respuesta I2C recibida correctamente: longitud, cabecera, versión y CRC válidos. Incluye las respuestas de estado con fecha/hora. |
+| Amarillo | Envío de una orden al slave, con un pulso mínimo de 100 ms para hacerlo visible, sin añadir esperas al programa. |
+| Rojo | Arranque sin respuesta todavía, respuesta ausente o inválida, error al enviar o timeout de confirmación. Un fallo cancela inmediatamente el amarillo. |
+
+Las consultas automáticas cada 250 ms actualizan la indicación de comunicación; el amarillo corresponde al envío de órdenes. Una respuesta válida posterior recupera el verde. El verde confirma la comunicación, aunque el RTC no tenga hora válida o el slave informe que rechazó una orden; revisar `horaValida` y `resultado` en el monitor serie.
 
 Abrir el `.ino` de esta carpeta y seleccionar ESP32-S3. Mantener `Protocolo.h` junto al sketch. Si se usa USB nativo, activar **USB CDC On Boot**. Monitor serie a **115200**, con **Nueva línea** o **Ambos NL y CR**. No se manda ningún movimiento al arrancar.
 

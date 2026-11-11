@@ -14,13 +14,13 @@ Los números GPIO son los del microcontrolador. Los números de pin de los conec
 | DIR | 4 | JP3.4 |
 | ENA | 2 | JP3.6 |
 | HOME | 1 | JP2.3, conector de servicio |
-| LED RGB direccionable | 48 | Indicador del contacto HOME |
+| LED RGB direccionable | 48 | Indicador de referencia y recepción |
 | SDA del slave | 6 | POGO.4 |
 | SCL del slave | 7 | POGO.3 |
 
 **HOME se asigna al conector de servicio JP2**: conectar un contacto normalmente abierto entre **JP2.3 (GPIO1)** y **JP2.2 (GND)**. Se configura `INPUT_PULLUP`, activo LOW. JP2.1 es 3,3 V y no se necesita para un contacto seco. BTNA/GPIO5 queda sin usar por este sketch.
 
-Seleccionar ESP32-S3 en Arduino e instalar `ESP_FlexyStepper` y **RTClib de Adafruit** (con su dependencia Adafruit BusIO). `SPI` y `SD` vienen con el core ESP32. Para ver mensajes por USB nativo, activar **USB CDC On Boot**. Abrir el `.ino` de esta carpeta; `Protocolo.h` y `Perifericos.h` deben permanecer junto a él. El maestro no necesita la biblioteca del motor.
+Seleccionar ESP32-S3 en Arduino e instalar `ESP_FlexyStepper`, **Adafruit NeoPixel** y **RTClib de Adafruit** (con su dependencia Adafruit BusIO). `SPI` y `SD` vienen con el core ESP32. Para ver mensajes por USB nativo, activar **USB CDC On Boot**. Abrir el `.ino` de esta carpeta; `Protocolo.h` y `Perifericos.h` deben permanecer junto a él. El maestro no necesita la biblioteca del motor.
 
 El firmware asume **ENA activo LOW**. Si el driver conectado habilita con HIGH, cambiar `ENA_ACTIVO` antes de probar. Arranca sin movimiento y con ENA deshabilitado; al aceptar HOME o un movimiento lo habilita y lo mantiene habilitado para conservar par al terminar. STOP detiene los pulsos y mantiene ENA; no desconecta potencia.
 
@@ -42,33 +42,35 @@ Al iniciar se encola un estado completo con `HOME=1` si el contacto está activo
 | --- | --- | --- |
 | Contacto HOME | GPIO1, JP2.3 | Entrada `INPUT_PULLUP`, activa en LOW. |
 | Retorno del contacto | GND, JP2.2 | Cerrar el contacto entre JP2.3 y JP2.2 activa HOME. |
-| LED RGB direccionable | GPIO48 | Un único pin de datos controla rojo, verde y azul mediante `neopixelWrite`; no hay un GPIO separado para cada color. |
+| LED RGB direccionable | GPIO48 | Adafruit NeoPixel controla un píxel con formato `NEO_GRB + NEO_KHZ800`; un único pin de datos controla rojo, verde y azul. |
 
-El LED muestra el contacto desde el arranque y se actualiza cuando cambia. El brillo configurado es **16 sobre 255** (`BRILLO_HOME`).
+El LED indica la referencia del motor desde el arranque. El brillo configurado es **16 sobre 255** (`BRILLO_HOME`). El contacto físico se consulta por separado con `HOME=0/1` en USB o `FLAG_SWITCH` en I2C.
 
-| Color | Valor RGB (R, G, B) | Estado del contacto | Consola USB |
-| --- | --- | --- | --- |
-| **Rojo** | `(16, 0, 0)` | Inactivo: contacto abierto, GPIO1 en HIGH. | `HOME=0` |
-| **Verde** | `(0, 16, 0)` | Activo: contacto cerrado hacia GND, GPIO1 en LOW. | `HOME=1` |
+| Color | Valor RGB (R, G, B) | Significado |
+| --- | --- | --- |
+| **Rojo** | `(16, 0, 0)` | Sin origen establecido: `origen=0`. |
+| **Verde** | `(0, 16, 0)` | HOME completado: `origen=1`, aunque el contacto se libere después. |
+| **Amarillo temporal** | `(16, 16, 0)` | Recepción de una trama I2C o un comando USB no vacío, incluso si resulta inválido. No confirma aceptación ni ejecución correcta. |
 
-**Rojo significa contacto inactivo**, que es normal cuando el motor está fuera del sensor. El firmware actual no asigna azul, otros colores ni parpadeos a movimiento, errores, RTC o SD.
+Cada recepción activa un destello amarillo de **100 ms**, seguido de al menos **100 ms del color base**. Los mensajes que llegan durante ese ciclo se agrupan en un destello pendiente: con tráfico continuo alterna amarillo y el estado actual, sin quedar fijo en amarillo. Se usan tiempos con `millis()`, sin esperas añadidas; los callbacks I2C solo marcan actividad y el RGB se escribe desde `loop()`. Las consultas de lectura I2C (`onRequest`) no activan destellos. Los tiempos pueden prolongarse si una operación de SD/RTC retrasa el bucle.
 
 ### Otros estados y cómo interpretarlos
 
-El color representa la lectura física del sensor. La referencia del motor se establece al completar el comando `HOME` y se consulta con `origen` en la consola.
+El color base se recalcula con la referencia actual al terminar cada destello. Un error de comunicación no borra una referencia válida ni deja el LED fijado en un color de error. No se asignan colores exclusivos a errores, RTC o SD.
 
-| Situación | Estado / resultado | LED RGB |
+| Situación | Estado / resultado | Color base (fuera del destello amarillo) |
 | --- | --- | --- |
-| Recién encendido | `mov=0`, `origen=0`; ENA deshabilitado. | Rojo o verde según el contacto. |
-| Buscando origen | `mov=1`, `origen=0`; flag I2C `FLAG_HOME` activo. Primero libera el contacto si ya estaba activo y luego lo busca. | Sigue el contacto durante la búsqueda. |
-| HOME completado | `mov=0`, `origen=1`, posición cero. | Verde mientras el contacto siga activo. |
-| Movimiento a una posición | `mov=1`, `origen=1`. | Rojo al salir del contacto; conserva `origen=1`. |
-| Detenido tras un movimiento | `mov=0`, `origen=1`. | Según el contacto, aunque conserve la referencia. |
-| HOME no encontrado o contacto que no se libera | Resultado `HOME_NO_ENCONTRADO`, `mov=0`, `origen=0`. | Rojo si está inactivo; verde si sigue activo. No tiene un color exclusivo de error. |
-| STOP durante HOME | `mov=0`, `origen=0`; se cancela la búsqueda. | Según el contacto. |
-| STOP fuera de HOME | `mov=0`; conserva el estado de referencia previo. | Según el contacto. |
+| Recién encendido | `mov=0`, `origen=0`; ENA deshabilitado. | Rojo, incluso si el contacto está activo. |
+| Buscando origen | `mov=1`, `origen=0`; flag I2C `FLAG_HOME` activo. Primero libera el contacto si ya estaba activo y luego lo busca. | Rojo. |
+| HOME completado | `mov=0`, `origen=1`, posición cero. | Verde. |
+| Movimiento a una posición | `mov=1`, `origen=1`. | Verde, aunque salga del contacto. |
+| Detenido tras un movimiento | `mov=0`, `origen=1`. | Verde. |
+| HOME no encontrado o contacto que no se libera | Resultado `HOME_NO_ENCONTRADO`, `mov=0`, `origen=0`. | Rojo. |
+| STOP durante HOME | `mov=0`, `origen=0`; se cancela la búsqueda. | Rojo. |
+| STOP fuera de HOME | `mov=0`; conserva el estado de referencia previo. | Verde si tiene origen; rojo si no. |
+| Trama I2C inválida | Resultado `TRAMA_INVALIDA`; conserva la referencia. | Destello amarillo y retorno a verde o rojo según `origen`. |
 
-Consultar con `E` o `RTC`. En USB, `HOME` indica el **contacto** y `mov` incluye movimiento o búsqueda de origen; en I2C, `FLAG_SWITCH` indica el contacto, `FLAG_HOME` la búsqueda y `FLAG_REFERENCIADO` la referencia. Los campos `RTC`, `hora_valida`, `SD` y `error_SD` informan los periféricos por consola y no cambian el color del LED.
+Consultar con `E` o `RTC`. En USB, `HOME` indica el **contacto**, `origen` la **referencia** y `mov` incluye movimiento o búsqueda de origen; en I2C, `FLAG_SWITCH` indica el contacto, `FLAG_HOME` la búsqueda y `FLAG_REFERENCIADO` la referencia. Los campos `RTC`, `hora_valida`, `SD` y `error_SD` informan los periféricos por consola y no cambian el color base del LED.
 
 ### Comandos USB
 

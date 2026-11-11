@@ -96,6 +96,7 @@ void comandoConsola(char *s) {
   while (n && isspace(static_cast<unsigned char>(s[n - 1]))) s[--n] = 0;
   for (size_t i = 0; i < n; ++i) s[i] = toupper(static_cast<unsigned char>(s[i]));
   if (!n) return;
+  indicarMensajeRecibido();
   if (!strcmp(s, "H") || !strcmp(s, "?")) {
     decirConsola("h / ? = ayuda | Enviar comandos con Enter (NL o CR).");
     decirConsola("fDD/MM/AAAA = fecha, 2000..2099. Ejemplo: f09/11/2026");
