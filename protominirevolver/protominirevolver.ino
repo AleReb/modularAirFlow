@@ -1,5 +1,6 @@
 // Modulo I2C: recibe ordenes y genera los pasos localmente.
 #include <Arduino.h>
+#include <esp32-hal-rgb-led.h>
 #include <Wire.h>
 #include <ESP_FlexyStepper.h>
 #include <string.h>
@@ -13,6 +14,8 @@
 // PCB pcb/revolver: JP3 motor, JP2 servicio/HOME y POGO I2C.
 constexpr int STEP_PIN = 3, DIR_PIN = 4, HOME_PIN = 1;
 constexpr int ENA_PIN = 2;
+constexpr int LED_RGB_PIN = 48;
+constexpr uint8_t BRILLO_HOME = 16;
 constexpr int SDA_PIN = 6, SCL_PIN = 7;
 // Ajustar si el driver conectado habilita con nivel HIGH.
 constexpr int ENA_ACTIVO = LOW;
@@ -33,6 +36,16 @@ uint8_t faseHome = 0; // 0=inactivo, 1=liberar switch, 2=buscar switch.
 uint8_t resultado = RESULTADO_OK, ultimaSecuencia = 0;
 uint8_t secuenciaMovimiento = 0, operacionMovimiento = 0;
 uint32_t ultimoEstado = 0;
+
+void actualizarLedHome() {
+  static int ultimoHome = -1;
+  int activo = digitalRead(HOME_PIN) == HOME_ACTIVO;
+  if (activo == ultimoHome) return;
+  // RGB direccionable: actualizar solo al cambiar el contacto.
+  neopixelWrite(LED_RGB_PIN, activo ? 0 : BRILLO_HOME,
+                activo ? BRILLO_HOME : 0, 0);
+  ultimoHome = activo;
+}
 
 void publicarEstado() {
   uint8_t p[TAM_ESTADO] = {0x5A, VERSION_PROTOCOLO};
@@ -164,6 +177,7 @@ void setup() {
   pinMode(ENA_PIN, OUTPUT);
   Serial.begin(115200);
   pinMode(HOME_PIN, INPUT_PULLUP);
+  actualizarLedHome();
   motor.connectToPins(STEP_PIN, DIR_PIN);
   motor.setSpeedInStepsPerSecond(150);
   motor.setAccelerationInStepsPerSecondPerSecond(500);
@@ -184,6 +198,8 @@ void setup() {
 #if ARDUINO_USB_CDC_ON_BOOT
   Serial.setTxTimeoutMs(0); // En loop, descartar diagnostico antes que esperar por USB.
 #endif
+  decirConsola("[arranque] HOME: 1=activo, 0=inactivo; RGB GPIO48: verde=activo, rojo=inactivo.");
+  estadoConsola();
 }
 
 void loop() {
@@ -222,6 +238,7 @@ void loop() {
     faseHome = 0;
   }
   motor.processMovement(); // Movimiento no bloqueante: I2C sigue disponible.
+  actualizarLedHome();
   if (faseHome && motor.motionComplete()) {
     faseHome = 0;
     resultado = HOME_NO_ENCONTRADO;

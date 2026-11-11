@@ -14,6 +14,7 @@ Los números GPIO son los del microcontrolador. Los números de pin de los conec
 | DIR | 4 | JP3.4 |
 | ENA | 2 | JP3.6 |
 | HOME | 1 | JP2.3, conector de servicio |
+| LED RGB direccionable | 48 | Indicador del contacto HOME |
 | SDA del slave | 6 | POGO.4 |
 | SCL del slave | 7 | POGO.3 |
 
@@ -32,6 +33,44 @@ El movimiento se procesa en `loop()`, sin servicio de motor en segundo plano. Lo
 El bus POGO funciona a 100 kHz con señales de 3,3 V. BTNA queda sin usar. X1/X2 comparten el bus interno del RTC; no se consultan otros dispositivos ni la memoria AT24C32 del módulo.
 
 ## Consola USB del propio revolver
+
+Al iniciar se encola un estado completo con `HOME=1` si el contacto está activo (LOW) o `HOME=0` si está inactivo. No se inicia movimiento automáticamente.
+
+### Pines e indicador RGB de HOME
+
+| Señal | Pin / conexión | Configuración |
+| --- | --- | --- |
+| Contacto HOME | GPIO1, JP2.3 | Entrada `INPUT_PULLUP`, activa en LOW. |
+| Retorno del contacto | GND, JP2.2 | Cerrar el contacto entre JP2.3 y JP2.2 activa HOME. |
+| LED RGB direccionable | GPIO48 | Un único pin de datos controla rojo, verde y azul mediante `neopixelWrite`; no hay un GPIO separado para cada color. |
+
+El LED muestra el contacto desde el arranque y se actualiza cuando cambia. El brillo configurado es **16 sobre 255** (`BRILLO_HOME`).
+
+| Color | Valor RGB (R, G, B) | Estado del contacto | Consola USB |
+| --- | --- | --- | --- |
+| **Rojo** | `(16, 0, 0)` | Inactivo: contacto abierto, GPIO1 en HIGH. | `HOME=0` |
+| **Verde** | `(0, 16, 0)` | Activo: contacto cerrado hacia GND, GPIO1 en LOW. | `HOME=1` |
+
+**Rojo significa contacto inactivo**, que es normal cuando el motor está fuera del sensor. El firmware actual no asigna azul, otros colores ni parpadeos a movimiento, errores, RTC o SD.
+
+### Otros estados y cómo interpretarlos
+
+El color representa la lectura física del sensor. La referencia del motor se establece al completar el comando `HOME` y se consulta con `origen` en la consola.
+
+| Situación | Estado / resultado | LED RGB |
+| --- | --- | --- |
+| Recién encendido | `mov=0`, `origen=0`; ENA deshabilitado. | Rojo o verde según el contacto. |
+| Buscando origen | `mov=1`, `origen=0`; flag I2C `FLAG_HOME` activo. Primero libera el contacto si ya estaba activo y luego lo busca. | Sigue el contacto durante la búsqueda. |
+| HOME completado | `mov=0`, `origen=1`, posición cero. | Verde mientras el contacto siga activo. |
+| Movimiento a una posición | `mov=1`, `origen=1`. | Rojo al salir del contacto; conserva `origen=1`. |
+| Detenido tras un movimiento | `mov=0`, `origen=1`. | Según el contacto, aunque conserve la referencia. |
+| HOME no encontrado o contacto que no se libera | Resultado `HOME_NO_ENCONTRADO`, `mov=0`, `origen=0`. | Rojo si está inactivo; verde si sigue activo. No tiene un color exclusivo de error. |
+| STOP durante HOME | `mov=0`, `origen=0`; se cancela la búsqueda. | Según el contacto. |
+| STOP fuera de HOME | `mov=0`; conserva el estado de referencia previo. | Según el contacto. |
+
+Consultar con `E` o `RTC`. En USB, `HOME` indica el **contacto** y `mov` incluye movimiento o búsqueda de origen; en I2C, `FLAG_SWITCH` indica el contacto, `FLAG_HOME` la búsqueda y `FLAG_REFERENCIADO` la referencia. Los campos `RTC`, `hora_valida`, `SD` y `error_SD` informan los periféricos por consola y no cambian el color del LED.
+
+### Comandos USB
 
 Abrir el monitor serie a **115200** y enviar cada comando con **Enter / Nueva linea** (acepta LF, CR o CRLF). La consola funciona junto con el slave POGO; no hace falta conectar el maestro. Acepta mayusculas o minusculas.
 
